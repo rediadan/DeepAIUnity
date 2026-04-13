@@ -2,15 +2,27 @@ using UnityEngine;
 
 namespace DeepAIArena
 {
+    public enum ArenaGhostPolicyMode
+    {
+        RuleBased,
+        OnnxInference
+    }
+
     [RequireComponent(typeof(ArenaCharacterController))]
     public class ArenaGhostController : MonoBehaviour
     {
+        [Header("Ghost Policy")]
+        [Tooltip("Rule-Based keeps the handcrafted Ghost logic. ONNX Input runs the trained model.")]
+        [SerializeField] private ArenaGhostPolicyMode policyMode = ArenaGhostPolicyMode.RuleBased;
+        [SerializeField] private ArenaGhostOnnxPolicy onnxPolicy;
+
         private ArenaCharacterController controller;
         private ArenaGameManager manager;
 
         private void Awake()
         {
             controller = GetComponent<ArenaCharacterController>();
+            onnxPolicy ??= GetComponent<ArenaGhostOnnxPolicy>();
         }
 
         private void Update()
@@ -18,6 +30,19 @@ namespace DeepAIArena
             manager ??= FindAnyObjectByType<ArenaGameManager>();
             if (manager == null)
             {
+                return;
+            }
+
+            if (policyMode == ArenaGhostPolicyMode.OnnxInference
+                && onnxPolicy != null
+                && onnxPolicy.TryEvaluate(manager.BuildObservation(ArenaSide.Right), out var modelAction))
+            {
+                controller.SetGhostInput(
+                    modelAction.horizontal,
+                    modelAction.jump,
+                    modelAction.drop,
+                    modelAction.shove,
+                    modelAction.routeName);
                 return;
             }
 

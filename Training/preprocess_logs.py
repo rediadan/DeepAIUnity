@@ -36,11 +36,21 @@ MOVE_TO_INDEX = {
 }
 
 
+def normalize_move_action(move_action) -> int:
+    if isinstance(move_action, int):
+        return move_action
+
+    if isinstance(move_action, str):
+        return MOVE_TO_INDEX[move_action]
+
+    raise KeyError(move_action)
+
+
 def parse_step_rows(log_path: Path) -> list[dict]:
     rows: list[dict] = []
-    with log_path.open("r", encoding="utf-8") as handle:
+    with log_path.open("r", encoding="utf-8-sig") as handle:
         for raw_line in handle:
-            line = raw_line.strip()
+            line = raw_line.lstrip("\ufeff").strip()
             if not line:
                 continue
 
@@ -100,7 +110,7 @@ def main() -> None:
         observation = row["observation"]
         action = row["action"]
         features.append(build_feature_vector(observation))
-        move_targets.append(MOVE_TO_INDEX[action["moveAction"]])
+        move_targets.append(normalize_move_action(action["moveAction"]))
         jump_targets.append(1.0 if action["jumpPressed"] else 0.0)
         drop_targets.append(1.0 if action["dropPressed"] else 0.0)
         shove_targets.append(1.0 if action.get("shovePressed", False) else 0.0)

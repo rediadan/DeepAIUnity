@@ -1,80 +1,84 @@
-# Deep AI Arena Training Pipeline
+# Deep AI Arena 학습 파이프라인
 
-This folder contains a minimal behavior-cloning pipeline for the Unity prototype.
+이 폴더에는 Unity 프로토타입을 위한 최소한의 행동 복제(Behavior Cloning) 학습 파이프라인이 들어 있습니다.
 
-## Flow
+## 전체 흐름
 
-1. Play the game in Unity and produce `arena_training_log.jsonl`.
-2. Convert the JSONL log into a compact dataset.
-3. Train a behavior-cloning model.
-4. Export the trained checkpoint to ONNX.
+1. Unity에서 게임을 플레이하고 `arena_training_log.jsonl` 로그를 생성합니다.
+2. JSONL 로그를 학습용 데이터셋으로 변환합니다.
+3. 행동 복제 모델을 학습합니다.
+4. 학습된 체크포인트를 ONNX와 정규화 통계 JSON으로 내보냅니다.
 
-## Expected log location
+## 예상 로그 위치
 
-The runtime logger writes to:
+런타임 로거는 아래 위치에 파일을 생성합니다.
 
 - `Application.persistentDataPath/arena_training_log.jsonl`
 
-Copy that file into `Training/data/` or pass the full path directly.
+이 파일을 `Training/data/`로 복사하거나, 전체 경로를 직접 넘겨도 됩니다.
 
-## 1. Preprocess logs
+## 1. 로그 전처리
 
 ```bash
 python preprocess_logs.py --input "C:/path/to/arena_training_log.jsonl" --output "data/arena_dataset.npz"
 ```
 
-Notes:
+참고:
 
-- Reward-only lines are ignored automatically.
-- Only player step logs are expected now.
-- Idle-only frames are downsampled by default to reduce dataset imbalance.
+- 보상 이벤트만 있는 줄은 자동으로 무시됩니다.
+- 현재는 플레이어 step 로그만 저장되도록 되어 있습니다.
+- 데이터 불균형을 줄이기 위해 아무 행동도 없는 idle 프레임은 기본적으로 일부만 유지합니다.
 
-## 2. Train behavior cloning
+## 2. 행동 복제 학습
 
 ```bash
 python train_behavior_cloning.py --dataset "data/arena_dataset.npz" --output "models/arena_bc.pt"
 ```
 
-Optional arguments:
+선택 가능한 인자:
 
 - `--epochs`
 - `--batch-size`
 - `--lr`
 - `--hidden-size`
 
-## 3. Export ONNX
+## 3. ONNX 내보내기
 
 ```bash
 python export_onnx.py --checkpoint "models/arena_bc.pt" --output "models/arena_bc.onnx"
 ```
 
-## Python dependencies
+이 명령은 기본적으로 `models/arena_bc.stats.json`도 함께 생성합니다.
 
-Recommended packages:
+## Python 의존성
+
+권장 패키지:
 
 ```bash
 pip install numpy torch
 ```
 
-If ONNX export is needed:
+ONNX 내보내기까지 필요하면:
 
 ```bash
 pip install onnx
 ```
 
-## Output heads
+## 모델 출력
 
-The model predicts:
+모델은 아래 출력을 예측합니다.
 
-- move logits: `Idle / MoveLeft / MoveRight`
-- jump probability
-- drop probability
-- shove probability
+- 이동 logits: `Idle / MoveLeft / MoveRight`
+- 점프 확률
+- 드롭다운 확률
+- 밀치기 확률
 
-## Next Unity-side step
+## Unity에서 다음 단계
 
-After ONNX export, the next implementation step is:
+ONNX를 내보낸 뒤 Unity에서는 다음 순서로 진행하면 됩니다.
 
-- load the ONNX model in Unity
-- normalize observations using the saved mean/std from the checkpoint
-- replace Ghost rule decisions with model inference
+- `.onnx` 파일을 `Assets/` 안으로 가져옵니다.
+- 생성된 `.stats.json` 파일을 `TextAsset`으로 가져옵니다.
+- Unity AI Inference / Sentis 패키지가 없다면 설치합니다.
+- 두 파일을 `ArenaGhostOnnxPolicy`에 연결합니다.
+- `ArenaGhostController`의 정책 모드를 `RuleBased`에서 `OnnxInference`로 변경합니다.

@@ -172,6 +172,7 @@ namespace DeepAIArena
             if (isGhost)
             {
                 actorObject.AddComponent<ArenaGhostController>();
+                actorObject.AddComponent<ArenaGhostOnnxPolicy>();
             }
 
             return controller;

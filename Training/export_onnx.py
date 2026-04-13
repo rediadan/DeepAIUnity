@@ -1,4 +1,5 @@
 import argparse
+import json
 from pathlib import Path
 
 import torch
@@ -35,9 +36,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Export Deep AI Arena BC checkpoint to ONNX.")
     parser.add_argument("--checkpoint", required=True, help="Path to .pt checkpoint")
     parser.add_argument("--output", required=True, help="Path to output .onnx file")
+    parser.add_argument(
+        "--stats-output",
+        help="Optional path to output normalization stats JSON. Defaults to <output>.stats.json",
+    )
     args = parser.parse_args()
 
-    checkpoint = torch.load(args.checkpoint, map_location="cpu")
+    checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     model = BehaviorCloningExportModel(
         input_size=checkpoint["input_size"],
         hidden_size=checkpoint["hidden_size"],
@@ -48,6 +53,7 @@ def main() -> None:
     dummy = torch.randn(1, checkpoint["input_size"], dtype=torch.float32)
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    stats_output_path = Path(args.stats_output) if args.stats_output else output_path.with_suffix(".stats.json")
 
     torch.onnx.export(
         model,
@@ -59,7 +65,14 @@ def main() -> None:
         opset_version=17,
     )
 
+    stats_payload = {
+        "feature_mean": checkpoint["feature_mean"].tolist(),
+        "feature_std": checkpoint["feature_std"].tolist(),
+    }
+    stats_output_path.write_text(json.dumps(stats_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
     print(f"Exported ONNX model to {output_path}")
+    print(f"Saved normalization stats to {stats_output_path}")
 
 
 if __name__ == "__main__":

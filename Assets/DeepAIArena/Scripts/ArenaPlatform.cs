@@ -44,22 +44,15 @@ namespace DeepAIArena
                 effector.useOneWay = true;
                 effector.surfaceArc = 170f;
                 effector.useColliderMask = false;
+                effector.enabled = true;
                 collider.usedByEffector = true;
             }
             else
             {
                 if (effector != null)
                 {
-                    if (Application.isPlaying)
-                    {
-                        Destroy(effector);
-                    }
-                    else
-                    {
-                        DestroyImmediate(effector);
-                    }
+                    effector.enabled = false;
                 }
-
                 collider.usedByEffector = false;
             }
         }
