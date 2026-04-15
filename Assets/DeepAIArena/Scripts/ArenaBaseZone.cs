@@ -8,11 +8,18 @@ namespace DeepAIArena
         private ArenaGameManager manager;
 
         [SerializeField] private ArenaSide side;
+        [SerializeField] private bool sharedBase;
 
         public ArenaSide Side
         {
             get => side;
             set => side = value;
+        }
+
+        public bool SharedBase
+        {
+            get => sharedBase;
+            set => sharedBase = value;
         }
 
         public void Initialize(ArenaGameManager arenaGameManager)
@@ -27,7 +34,7 @@ namespace DeepAIArena
                 return;
             }
 
-            if (controller.Side == Side && controller.HasItem)
+            if (controller.HasItem && (sharedBase || controller.Side == Side))
             {
                 manager.Deliver(controller);
             }

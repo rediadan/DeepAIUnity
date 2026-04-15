@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using UnityEngine;
@@ -24,6 +25,8 @@ namespace DeepAIArena
 
     public class ArenaGhostOnnxPolicy : MonoBehaviour
     {
+        private const int BaseFeatureCount = 24;
+
         [SerializeField] private UnityEngine.Object modelAsset;
         [SerializeField] private TextAsset normalizationStats;
         [SerializeField] private bool preferGpu = true;
@@ -31,8 +34,10 @@ namespace DeepAIArena
         [SerializeField] private float dropThreshold = 0.5f;
         [SerializeField] private float shoveThreshold = 0.5f;
         [SerializeField] private bool verboseLogging;
+        [SerializeField] private int sequenceLength = 4;
 
         private ArenaNormalizationStats stats;
+        private readonly Queue<float[]> observationHistory = new();
         private object workerInstance;
         private Type tensorType;
         private Type workerType;
@@ -43,10 +48,12 @@ namespace DeepAIArena
         private MethodInfo disposeMethod;
         private bool attemptedInitialization;
         private bool initializationSucceeded;
-        private int expectedFeatureCount = 19;
+        private int expectedFeatureCount = BaseFeatureCount;
+        private float lastObservedRoundElapsedTime = -1f;
 
         private void OnDisable()
         {
+            ResetObservationHistory();
             DisposeWorker();
         }
 
@@ -81,14 +88,21 @@ namespace DeepAIArena
                 var shoveProb = ReadTensor(shoveTensor);
 
                 var moveIndex = ArgMax(moveLogits);
+                var isRightSideActor = transform.position.x > 0f;
+                var horizontal = moveIndex switch
+                {
+                    1 => -1f,
+                    2 => 1f,
+                    _ => 0f
+                };
+                if (isRightSideActor)
+                {
+                    horizontal *= -1f;
+                }
+
                 action = new ArenaGhostModelAction
                 {
-                    horizontal = moveIndex switch
-                    {
-                        1 => -1f,
-                        2 => 1f,
-                        _ => 0f
-                    },
+                    horizontal = horizontal,
                     jump = jumpProb.Length > 0 && jumpProb[0] >= jumpThreshold,
                     drop = dropProb.Length > 0 && dropProb[0] >= dropThreshold,
                     shove = shoveProb.Length > 0 && shoveProb[0] >= shoveThreshold,
@@ -99,7 +113,7 @@ namespace DeepAIArena
             }
             catch (Exception exception)
             {
-                Debug.LogWarning($"ONNX Ghost inference failed: {exception.Message}", this);
+                Debug.LogWarning($"ONNX Ghost inference failed: {DescribeException(exception)}", this);
                 DisposeWorker();
                 attemptedInitialization = false;
                 initializationSucceeded = false;
@@ -148,6 +162,10 @@ namespace DeepAIArena
             }
 
             expectedFeatureCount = stats.feature_mean.Length;
+            if (expectedFeatureCount % BaseFeatureCount == 0)
+            {
+                sequenceLength = Mathf.Max(1, expectedFeatureCount / BaseFeatureCount);
+            }
 
             if (!TryResolveInferenceRuntime(out var runtime))
             {
@@ -245,7 +263,7 @@ namespace DeepAIArena
             }
             catch (Exception exception)
             {
-                Debug.LogWarning($"Failed to initialize ONNX Ghost policy: {exception.Message}", this);
+                Debug.LogWarning($"Failed to initialize ONNX Ghost policy: {DescribeException(exception)}", this);
                 DisposeWorker();
                 return false;
             }
@@ -366,22 +384,22 @@ namespace DeepAIArena
                 return null;
             }
 
-            var constructor = tensorShapeType.GetConstructor(new[] { typeof(int), typeof(int), typeof(int), typeof(int) });
-            if (constructor != null)
-            {
-                return constructor.Invoke(new object[] { 1, 1, 1, featureCount });
-            }
-
-            constructor = tensorShapeType.GetConstructor(new[] { typeof(int), typeof(int) });
+            var constructor = tensorShapeType.GetConstructor(new[] { typeof(int), typeof(int) });
             if (constructor != null)
             {
                 return constructor.Invoke(new object[] { 1, featureCount });
             }
 
+            constructor = tensorShapeType.GetConstructor(new[] { typeof(int), typeof(int), typeof(int), typeof(int) });
+            if (constructor != null)
+            {
+                return constructor.Invoke(new object[] { 1, featureCount, 1, 1 });
+            }
+
             constructor = tensorShapeType.GetConstructor(new[] { typeof(int[]) });
             if (constructor != null)
             {
-                return constructor.Invoke(new object[] { new[] { 1, 1, 1, featureCount } });
+                return constructor.Invoke(new object[] { new[] { 1, featureCount } });
             }
 
             return null;
@@ -389,35 +407,58 @@ namespace DeepAIArena
 
         private float[] BuildNormalizedObservation(ArenaObservationSnapshot observation)
         {
-            var values = new[]
+            var isRightSideActor = transform.position.x > 0f;
+            var mirroredSelfPositionX = MirrorX(observation.selfPosition.x, isRightSideActor);
+            var mirroredOpponentPositionX = MirrorX(observation.opponentPosition.x, isRightSideActor);
+            var mirroredItemPositionX = MirrorX(observation.itemPosition.x, isRightSideActor);
+            var mirroredBasePositionX = MirrorX(observation.basePosition.x, isRightSideActor);
+            var mirroredTargetPositionX = MirrorX(observation.targetPosition.x, isRightSideActor);
+            var mirroredItemDeltaX = MirrorSignedX(observation.itemDelta.x, isRightSideActor);
+            var mirroredBaseDeltaX = MirrorSignedX(observation.baseDelta.x, isRightSideActor);
+            var mirroredOpponentDeltaX = MirrorSignedX(observation.opponentDelta.x, isRightSideActor);
+
+            var currentFrameValues = new[]
             {
-                observation.selfPosition.x,
+                mirroredSelfPositionX,
                 observation.selfPosition.y,
-                observation.opponentPosition.x,
+                mirroredOpponentPositionX,
                 observation.opponentPosition.y,
-                observation.itemPosition.x,
+                mirroredItemPositionX,
                 observation.itemPosition.y,
-                observation.selfVelocity.x,
-                observation.selfVelocity.y,
-                observation.opponentVelocity.x,
-                observation.opponentVelocity.y,
-                observation.selfBasePosition.x,
-                observation.selfBasePosition.y,
-                observation.opponentBasePosition.x,
-                observation.opponentBasePosition.y,
+                mirroredBasePositionX,
+                observation.basePosition.y,
                 observation.selfHasItem ? 1f : 0f,
                 observation.opponentHasItem ? 1f : 0f,
                 observation.isGrounded ? 1f : 0f,
-                observation.opponentGrounded ? 1f : 0f,
-                observation.itemLane
+                observation.canDropDown ? 1f : 0f,
+                mirroredItemDeltaX,
+                observation.itemDelta.y,
+                mirroredBaseDeltaX,
+                observation.baseDelta.y,
+                mirroredOpponentDeltaX,
+                observation.opponentDelta.y,
+                mirroredTargetPositionX,
+                observation.targetPosition.y,
+                (float)observation.targetType,
+                observation.wallAhead ? 1f : 0f,
+                observation.hasGroundBelow ? 1f : 0f,
+                observation.roundElapsedTime
             };
+
+            if (currentFrameValues.Length != BaseFeatureCount)
+            {
+                Debug.LogWarning($"Per-frame observation feature count mismatch. expected={BaseFeatureCount}, actual={currentFrameValues.Length}", this);
+            }
+
+            UpdateObservationHistory(currentFrameValues, observation.roundElapsedTime);
+            var values = FlattenObservationHistory(currentFrameValues);
 
             if (values.Length != expectedFeatureCount)
             {
-                Debug.LogWarning($"Observation feature count mismatch. expected={expectedFeatureCount}, actual={values.Length}", this);
+                Debug.LogWarning($"Observation sequence feature count mismatch. expected={expectedFeatureCount}, actual={values.Length}", this);
             }
 
-            LogVerbose($"Observation raw feature count={values.Length}, expectedFeatureCount={expectedFeatureCount}");
+            LogVerbose($"Observation raw feature count={values.Length}, expectedFeatureCount={expectedFeatureCount}, sequenceLength={sequenceLength}");
 
             var normalized = new float[values.Length];
             for (var i = 0; i < values.Length; i++)
@@ -447,6 +488,51 @@ namespace DeepAIArena
             Array.Copy(values, resized, copyLength);
             LogVerbose($"Resized observation buffer from {values.Length} to expectedFeatureCount={expectedFeatureCount}");
             return resized;
+        }
+
+        private void UpdateObservationHistory(float[] currentFrameValues, float roundElapsedTime)
+        {
+            if (roundElapsedTime < lastObservedRoundElapsedTime)
+            {
+                ResetObservationHistory();
+            }
+
+            lastObservedRoundElapsedTime = roundElapsedTime;
+            observationHistory.Enqueue(currentFrameValues);
+            while (observationHistory.Count > sequenceLength)
+            {
+                observationHistory.Dequeue();
+            }
+        }
+
+        private float[] FlattenObservationHistory(float[] fallbackFrameValues)
+        {
+            var frames = observationHistory.ToList();
+            if (frames.Count == 0)
+            {
+                frames.Add(fallbackFrameValues);
+            }
+
+            while (frames.Count < sequenceLength)
+            {
+                frames.Insert(0, frames[0]);
+            }
+
+            var flattened = new float[frames.Count * BaseFeatureCount];
+            var writeIndex = 0;
+            foreach (var frame in frames)
+            {
+                Array.Copy(frame, 0, flattened, writeIndex, Mathf.Min(frame.Length, BaseFeatureCount));
+                writeIndex += BaseFeatureCount;
+            }
+
+            return flattened;
+        }
+
+        private void ResetObservationHistory()
+        {
+            observationHistory.Clear();
+            lastObservedRoundElapsedTime = -1f;
         }
 
         private float[] EnsureTensorBufferLength(object tensorShape, float[] values)
@@ -528,6 +614,34 @@ namespace DeepAIArena
             }
 
             Debug.Log($"[ArenaGhostOnnxPolicy] {message}", this);
+        }
+
+        private static string DescribeException(Exception exception)
+        {
+            if (exception == null)
+            {
+                return "unknown exception";
+            }
+
+            var message = $"{exception.GetType().Name}: {exception.Message}";
+            var inner = exception.InnerException;
+            while (inner != null)
+            {
+                message += $" | Inner -> {inner.GetType().Name}: {inner.Message}";
+                inner = inner.InnerException;
+            }
+
+            return message;
+        }
+
+        private static float MirrorX(float value, bool shouldMirror)
+        {
+            return shouldMirror ? -value : value;
+        }
+
+        private static float MirrorSignedX(float value, bool shouldMirror)
+        {
+            return shouldMirror ? -value : value;
         }
 
         private float[] ReadTensor(object tensorInstance)

@@ -8,6 +8,14 @@ namespace DeepAIArena
         OnnxInference
     }
 
+    public enum ArenaGhostRuntimeMode
+    {
+        RuleBased,
+        OnnxInference,
+        OnnxFailed,
+        OnnxFallback
+    }
+
     [RequireComponent(typeof(ArenaCharacterController))]
     public class ArenaGhostController : MonoBehaviour
     {
@@ -15,9 +23,13 @@ namespace DeepAIArena
         [Tooltip("Rule-Based keeps the handcrafted Ghost logic. ONNX Input runs the trained model.")]
         [SerializeField] private ArenaGhostPolicyMode policyMode = ArenaGhostPolicyMode.RuleBased;
         [SerializeField] private ArenaGhostOnnxPolicy onnxPolicy;
+        [SerializeField] private bool allowRuleFallbackOnOnnxFailure;
 
         private ArenaCharacterController controller;
         private ArenaGameManager manager;
+
+        public ArenaGhostPolicyMode PolicyMode => policyMode;
+        public ArenaGhostRuntimeMode RuntimeMode { get; private set; } = ArenaGhostRuntimeMode.RuleBased;
 
         private void Awake()
         {
@@ -33,17 +45,33 @@ namespace DeepAIArena
                 return;
             }
 
-            if (policyMode == ArenaGhostPolicyMode.OnnxInference
-                && onnxPolicy != null
-                && onnxPolicy.TryEvaluate(manager.BuildObservation(ArenaSide.Right), out var modelAction))
+            if (policyMode == ArenaGhostPolicyMode.OnnxInference)
             {
-                controller.SetGhostInput(
-                    modelAction.horizontal,
-                    modelAction.jump,
-                    modelAction.drop,
-                    modelAction.shove,
-                    modelAction.routeName);
-                return;
+                if (onnxPolicy != null
+                    && onnxPolicy.TryEvaluate(manager.BuildObservation(ArenaSide.Right), out var modelAction))
+                {
+                    RuntimeMode = ArenaGhostRuntimeMode.OnnxInference;
+                    controller.SetGhostInput(
+                        modelAction.horizontal,
+                        modelAction.jump,
+                        modelAction.drop,
+                        modelAction.shove,
+                        modelAction.routeName);
+                    return;
+                }
+
+                if (!allowRuleFallbackOnOnnxFailure)
+                {
+                    RuntimeMode = ArenaGhostRuntimeMode.OnnxFailed;
+                    controller.SetGhostInput(0f, false, false, false, "OnnxFailed");
+                    return;
+                }
+
+                RuntimeMode = ArenaGhostRuntimeMode.OnnxFallback;
+            }
+            else
+            {
+                RuntimeMode = ArenaGhostRuntimeMode.RuleBased;
             }
 
             var target = GetTargetPoint(out var routeName);
@@ -59,24 +87,24 @@ namespace DeepAIArena
         {
             if (controller.HasItem)
             {
-                routeName = "Return";
-                return manager.GetSpawnPoint(ArenaSide.Right);
+                routeName = "Escape";
+                return manager.GetSharedBasePoint();
             }
 
             var itemPosition = manager.Item.transform.position;
             var playerPosition = manager.Player.transform.position;
-            var preferIntercept = playerPosition.x > -4f && itemPosition.y > 1.4f;
+            var preferIntercept = playerPosition.y < 2.5f;
 
-            if (itemPosition.y > 2.4f)
+            if (itemPosition.y > 3.6f)
             {
                 routeName = "Top";
-                return preferIntercept ? new Vector2(3f, 3.2f) : itemPosition;
+                return preferIntercept ? new Vector2(2.4f, 3.4f) : itemPosition;
             }
 
-            if (itemPosition.y < 1.4f)
+            if (itemPosition.y < -1.4f)
             {
                 routeName = "Bottom";
-                return preferIntercept ? new Vector2(3f, -2.7f) : itemPosition;
+                return preferIntercept ? new Vector2(1.2f, -3.2f) : itemPosition;
             }
 
             routeName = "Center";
@@ -90,7 +118,7 @@ namespace DeepAIArena
                 return false;
             }
 
-            if (target.y > transform.position.y + 0.75f)
+            if (target.y > transform.position.y + 0.7f)
             {
                 return true;
             }
@@ -102,7 +130,7 @@ namespace DeepAIArena
 
         private bool ShouldDropTowards(Vector2 target)
         {
-            return controller.IsGrounded() && target.y < transform.position.y - 0.8f;
+            return controller.IsGrounded() && target.y < transform.position.y - 0.6f;
         }
 
         private bool ShouldShove()

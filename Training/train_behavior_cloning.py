@@ -7,6 +7,8 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, Dataset, random_split
 
+BASE_FEATURE_COUNT = 24
+
 
 class ArenaDataset(Dataset):
     def __init__(self, dataset_path: Path):
@@ -127,6 +129,7 @@ def main() -> None:
     )
 
     dataset = ArenaDataset(Path(args.dataset))
+    sequence_length = max(1, dataset.x.shape[1] // BASE_FEATURE_COUNT) if dataset.x.shape[1] % BASE_FEATURE_COUNT == 0 else 1
     train_size = int(len(dataset) * 0.9)
     valid_size = len(dataset) - train_size
     train_set, valid_set = random_split(dataset, [train_size, valid_size], generator=torch.Generator().manual_seed(42))
@@ -169,10 +172,13 @@ def main() -> None:
             "hidden_size": config.hidden_size,
             "feature_mean": dataset.feature_mean,
             "feature_std": dataset.feature_std,
+            "base_feature_count": BASE_FEATURE_COUNT,
+            "sequence_length": sequence_length,
         },
         output_path,
     )
     print(f"Saved model checkpoint to {output_path}")
+    print(f"Sequence length: {sequence_length}")
 
 
 if __name__ == "__main__":

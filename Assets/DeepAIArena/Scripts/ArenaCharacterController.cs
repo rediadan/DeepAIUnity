@@ -13,6 +13,8 @@ namespace DeepAIArena
         [SerializeField] private LayerMask groundMask = Physics2D.DefaultRaycastLayers;
         [SerializeField] private float groundCheckDistance = 0.1f;
         [SerializeField] private float groundCheckOriginOffset = -0.01f;
+        [SerializeField] private float wallCheckDistance = 0.08f;
+        [SerializeField] private float groundBelowCheckDistance = 0.7f;
         [SerializeField] private float platformDropDistance = 0.2f;
         [SerializeField] private float platformDropDuration = 0.3f;
         [SerializeField] private ArenaSide side;
@@ -36,6 +38,7 @@ namespace DeepAIArena
         private Coroutine dropCoroutine;
         private Collider2D ignoredPlatform;
         private float lastShoveTime = -999f;
+        private float facingDirection = 1f;
 
         public ArenaSide Side
         {
@@ -123,6 +126,7 @@ namespace DeepAIArena
             }
 
             moveInput = moveAction != null ? moveAction.ReadValue<float>() : 0f;
+            UpdateFacingDirection(moveInput);
             if (jumpAction != null && jumpAction.WasPressedThisFrame())
             {
                 jumpRequested = true;
@@ -146,7 +150,13 @@ namespace DeepAIArena
                 return;
             }
 
-            body.linearVelocity = new Vector2(moveInput * moveSpeed, body.linearVelocity.y);
+            var horizontalVelocity = moveInput * moveSpeed;
+            if (IsBlockedByWall(moveInput))
+            {
+                horizontalVelocity = 0f;
+            }
+
+            body.linearVelocity = new Vector2(horizontalVelocity, body.linearVelocity.y);
 
             if (jumpRequested && IsGrounded())
             {
@@ -176,6 +186,7 @@ namespace DeepAIArena
             }
 
             moveInput = Mathf.Clamp(horizontal, -1f, 1f);
+            UpdateFacingDirection(moveInput);
             DebugRouteName = routeName;
 
             if (jump)
@@ -209,6 +220,68 @@ namespace DeepAIArena
                 && hit.collider != ignoredPlatform
                 && !hit.transform.IsChildOf(transform)
                 && hit.distance <= groundCheckDistance;
+        }
+
+        public bool HasGroundBelow()
+        {
+            circleCollider ??= GetComponent<CircleCollider2D>();
+            if (circleCollider == null)
+            {
+                return false;
+            }
+
+            var bounds = circleCollider.bounds;
+            var origin = new Vector2(bounds.center.x, bounds.min.y + groundCheckOriginOffset);
+            var hit = Physics2D.Raycast(origin, Vector2.down, groundBelowCheckDistance, groundMask);
+            return hit.collider != null
+                && hit.collider != ignoredPlatform
+                && !hit.transform.IsChildOf(transform);
+        }
+
+        public bool CanDropDown()
+        {
+            circleCollider ??= GetComponent<CircleCollider2D>();
+            if (circleCollider == null || !IsGrounded())
+            {
+                return false;
+            }
+
+            var bounds = circleCollider.bounds;
+            var origin = new Vector2(bounds.center.x, bounds.min.y + groundCheckOriginOffset);
+            var hit = Physics2D.Raycast(origin, Vector2.down, platformDropDistance, groundMask);
+            return hit.collider != null
+                && !hit.transform.IsChildOf(transform)
+                && hit.collider.TryGetComponent(out ArenaPlatform platform)
+                && platform.AllowDropFromAbove;
+        }
+
+        public bool IsWallAhead()
+        {
+            return IsBlockedByWall(facingDirection);
+        }
+
+        private bool IsBlockedByWall(float horizontalInput)
+        {
+            if (Mathf.Abs(horizontalInput) < 0.01f)
+            {
+                return false;
+            }
+
+            circleCollider ??= GetComponent<CircleCollider2D>();
+            if (circleCollider == null)
+            {
+                return false;
+            }
+
+            var bounds = circleCollider.bounds;
+            var origin = bounds.center;
+            var radius = Mathf.Max(bounds.extents.y * 0.45f, 0.05f);
+            var direction = horizontalInput > 0f ? Vector2.right : Vector2.left;
+            var hit = Physics2D.CircleCast(origin, radius, direction, wallCheckDistance, groundMask);
+
+            return hit.collider != null
+                && hit.collider != ignoredPlatform
+                && !hit.transform.IsChildOf(transform);
         }
 
         private void TryDropThroughPlatform()
@@ -313,6 +386,18 @@ namespace DeepAIArena
 
             Gizmos.color = Color.yellow;
             Gizmos.DrawWireSphere(transform.position, shoveRange);
+        }
+
+        private void UpdateFacingDirection(float horizontalInput)
+        {
+            if (horizontalInput > 0.01f)
+            {
+                facingDirection = 1f;
+            }
+            else if (horizontalInput < -0.01f)
+            {
+                facingDirection = -1f;
+            }
         }
 
         public void PickupItem(ArenaItem item)

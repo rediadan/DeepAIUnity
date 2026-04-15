@@ -27,21 +27,32 @@ namespace DeepAIArena
         FellOffMap
     }
 
+    public enum ArenaTargetType
+    {
+        Item = 0,
+        Base = 1,
+        Opponent = 2
+    }
+
     [System.Serializable]
     public struct ArenaObservationSnapshot
     {
         public Vector2 selfPosition;
         public Vector2 opponentPosition;
         public Vector2 itemPosition;
-        public Vector2 selfVelocity;
-        public Vector2 opponentVelocity;
-        public Vector2 selfBasePosition;
-        public Vector2 opponentBasePosition;
+        public Vector2 basePosition;
         public bool selfHasItem;
         public bool opponentHasItem;
         public bool isGrounded;
-        public bool opponentGrounded;
-        public int itemLane;
+        public bool canDropDown;
+        public Vector2 itemDelta;
+        public Vector2 baseDelta;
+        public Vector2 opponentDelta;
+        public Vector2 targetPosition;
+        public ArenaTargetType targetType;
+        public bool wallAhead;
+        public bool hasGroundBelow;
+        public float roundElapsedTime;
     }
 
     [System.Serializable]
@@ -69,24 +80,25 @@ namespace DeepAIArena
     {
         private readonly Vector3[] itemSpawnPoints =
         {
-            new Vector3(0f, 2.95f, 0f),
-            new Vector3(0f, 1.95f, 0f),
-            new Vector3(0f, 0.95f, 0f)
+            new Vector3(0f, 4.6f, 0f),
+            new Vector3(-0.55f, 4.45f, 0f),
+            new Vector3(0.55f, 4.45f, 0f)
         };
 
         [SerializeField] private ArenaCharacterController player;
         [SerializeField] private ArenaCharacterController ghost;
         [SerializeField] private ArenaItem item;
-        [SerializeField] private ArenaBaseZone leftBase;
-        [SerializeField] private ArenaBaseZone rightBase;
+        [SerializeField] private ArenaBaseZone sharedBase;
         [SerializeField] private bool writeLogsToFile = true;
-        [SerializeField] private string outputFileName = "arena_training_log.jsonl";
+        [SerializeField] private string outputDirectoryName = "arena_training_rounds";
 
         private int leftScore;
         private int rightScore;
         private int roundIndex;
         private bool roundTransition;
-        private string outputPath;
+        private float roundStartTime;
+        private string outputDirectoryPath;
+        private string currentRoundOutputPath;
 
         public ArenaCharacterController Player => player;
         public ArenaCharacterController Ghost => ghost;
@@ -97,10 +109,15 @@ namespace DeepAIArena
         private void Awake()
         {
             EnsureReferences();
-            outputPath = Path.Combine(Application.persistentDataPath, outputFileName);
-            if (writeLogsToFile && File.Exists(outputPath))
+            outputDirectoryPath = Path.Combine(Application.persistentDataPath, outputDirectoryName);
+            if (writeLogsToFile && Directory.Exists(outputDirectoryPath))
             {
-                File.Delete(outputPath);
+                Directory.Delete(outputDirectoryPath, true);
+            }
+
+            if (writeLogsToFile)
+            {
+                Directory.CreateDirectory(outputDirectoryPath);
             }
 
             if (HasRequiredReferences())
@@ -118,19 +135,16 @@ namespace DeepAIArena
             ArenaCharacterController playerController,
             ArenaCharacterController ghostController,
             ArenaItem arenaItem,
-            ArenaBaseZone playerBase,
-            ArenaBaseZone ghostBase)
+            ArenaBaseZone arenaSharedBase)
         {
             player = playerController;
             ghost = ghostController;
             item = arenaItem;
-            leftBase = playerBase;
-            rightBase = ghostBase;
+            sharedBase = arenaSharedBase;
 
             player.Initialize(this);
             ghost.Initialize(this);
-            playerBase.Initialize(this);
-            ghostBase.Initialize(this);
+            arenaSharedBase.Initialize(this);
             item.Initialize(this);
 
             BeginRound();
@@ -161,7 +175,7 @@ namespace DeepAIArena
 
             item ??= GetComponentInChildren<ArenaItem>(true);
 
-            if (leftBase == null || rightBase == null)
+            if (sharedBase == null)
             {
                 var bases = GetComponentsInChildren<ArenaBaseZone>(true);
                 foreach (var arenaBase in bases)
@@ -171,13 +185,9 @@ namespace DeepAIArena
                         continue;
                     }
 
-                    if (arenaBase.Side == ArenaSide.Left)
+                    if (arenaBase.SharedBase)
                     {
-                        leftBase ??= arenaBase;
-                    }
-                    else if (arenaBase.Side == ArenaSide.Right)
-                    {
-                        rightBase ??= arenaBase;
+                        sharedBase ??= arenaBase;
                     }
                 }
             }
@@ -185,21 +195,25 @@ namespace DeepAIArena
 
         private bool HasRequiredReferences()
         {
-            return player != null && ghost != null && item != null && leftBase != null && rightBase != null;
+            return player != null && ghost != null && item != null && sharedBase != null;
         }
 
         private void InitializeRuntimeReferences()
         {
             player.Initialize(this);
             ghost.Initialize(this);
-            leftBase.Initialize(this);
-            rightBase.Initialize(this);
+            sharedBase.Initialize(this);
             item.Initialize(this);
         }
 
         public Vector3 GetSpawnPoint(ArenaSide side)
         {
-            return side == ArenaSide.Left ? new Vector3(-12f, 1.25f, 0f) : new Vector3(12f, 1.25f, 0f);
+            return side == ArenaSide.Left ? new Vector3(-9.75f, 5.15f, 0f) : new Vector3(9.75f, 5.15f, 0f);
+        }
+
+        public Vector3 GetSharedBasePoint()
+        {
+            return sharedBase != null ? sharedBase.transform.position : new Vector3(0f, -4.1f, 0f);
         }
 
         public void Deliver(ArenaCharacterController controller)
@@ -230,6 +244,8 @@ namespace DeepAIArena
         {
             roundTransition = false;
             roundIndex++;
+            roundStartTime = Time.time;
+            PrepareRoundLogFile();
 
             player.ResetActor(GetSpawnPoint(ArenaSide.Left));
             ghost.ResetActor(GetSpawnPoint(ArenaSide.Right));
@@ -252,23 +268,53 @@ namespace DeepAIArena
         {
             var self = side == ArenaSide.Left ? player : ghost;
             var opponent = side == ArenaSide.Left ? ghost : player;
-            var selfBase = side == ArenaSide.Left ? leftBase : rightBase;
-            var opponentBase = side == ArenaSide.Left ? rightBase : leftBase;
+            var basePosition = sharedBase != null ? (Vector2)sharedBase.transform.position : Vector2.zero;
+            var targetType = ResolveTargetType(self, opponent);
+            var targetPosition = ResolveTargetPosition(targetType, opponent, basePosition);
 
             return new ArenaObservationSnapshot
             {
                 selfPosition = self.transform.position,
                 opponentPosition = opponent.transform.position,
                 itemPosition = item.transform.position,
-                selfVelocity = self.Body != null ? self.Body.linearVelocity : Vector2.zero,
-                opponentVelocity = opponent.Body != null ? opponent.Body.linearVelocity : Vector2.zero,
-                selfBasePosition = selfBase.transform.position,
-                opponentBasePosition = opponentBase.transform.position,
+                basePosition = basePosition,
                 selfHasItem = self.HasItem,
                 opponentHasItem = opponent.HasItem,
                 isGrounded = self.IsGrounded(),
-                opponentGrounded = opponent.IsGrounded(),
-                itemLane = GetLaneIndex(item.transform.position.y)
+                canDropDown = self.CanDropDown(),
+                itemDelta = (Vector2)item.transform.position - (Vector2)self.transform.position,
+                baseDelta = basePosition - (Vector2)self.transform.position,
+                opponentDelta = (Vector2)opponent.transform.position - (Vector2)self.transform.position,
+                targetPosition = targetPosition,
+                targetType = targetType,
+                wallAhead = self.IsWallAhead(),
+                hasGroundBelow = self.HasGroundBelow(),
+                roundElapsedTime = Time.time - roundStartTime
+            };
+        }
+
+        private ArenaTargetType ResolveTargetType(ArenaCharacterController self, ArenaCharacterController opponent)
+        {
+            if (self.HasItem)
+            {
+                return ArenaTargetType.Base;
+            }
+
+            if (opponent.HasItem)
+            {
+                return ArenaTargetType.Opponent;
+            }
+
+            return ArenaTargetType.Item;
+        }
+
+        private Vector2 ResolveTargetPosition(ArenaTargetType targetType, ArenaCharacterController opponent, Vector2 basePosition)
+        {
+            return targetType switch
+            {
+                ArenaTargetType.Base => basePosition,
+                ArenaTargetType.Opponent => opponent != null ? (Vector2)opponent.transform.position : Vector2.zero,
+                _ => item != null ? (Vector2)item.transform.position : Vector2.zero,
             };
         }
 
@@ -279,18 +325,20 @@ namespace DeepAIArena
                 return;
             }
 
+            EnsureRoundLogFileReady();
+
             var rewardEvent = new ArenaRewardEvent
             {
                 eventType = eventType,
                 actorSide = actorSide,
                 rewardDelta = rewardDelta,
-                timestamp = Time.time,
+                timestamp = Time.time - roundStartTime,
                 roundIndex = roundIndex,
                 note = note
             };
 
             var json = JsonUtility.ToJson(rewardEvent);
-            File.AppendAllText(outputPath, json + "\n", Encoding.UTF8);
+            File.AppendAllText(currentRoundOutputPath, json + "\n", Encoding.UTF8);
         }
 
         private void LogStep(
@@ -304,16 +352,57 @@ namespace DeepAIArena
                 return;
             }
 
+            EnsureRoundLogFileReady();
+
             var json = JsonUtility.ToJson(new ArenaStepLog
             {
                 actorSide = actorSide.ToString(),
                 roundIndex = currentRoundIndex,
                 observation = observation,
                 action = action,
-                timestamp = Time.time
+                timestamp = Time.time - roundStartTime
             });
 
-            File.AppendAllText(outputPath, json + "\n", Encoding.UTF8);
+            File.AppendAllText(currentRoundOutputPath, json + "\n", Encoding.UTF8);
+        }
+
+        private void PrepareRoundLogFile()
+        {
+            if (!writeLogsToFile)
+            {
+                return;
+            }
+
+            Directory.CreateDirectory(outputDirectoryPath);
+            currentRoundOutputPath = Path.Combine(outputDirectoryPath, $"round_{roundIndex:0000}.jsonl");
+            if (File.Exists(currentRoundOutputPath))
+            {
+                File.Delete(currentRoundOutputPath);
+            }
+        }
+
+        private void EnsureRoundLogFileReady()
+        {
+            if (!writeLogsToFile)
+            {
+                return;
+            }
+
+            if (string.IsNullOrEmpty(outputDirectoryPath))
+            {
+                outputDirectoryPath = Path.Combine(Application.persistentDataPath, outputDirectoryName);
+            }
+
+            if (string.IsNullOrEmpty(currentRoundOutputPath))
+            {
+                if (roundIndex <= 0)
+                {
+                    roundIndex = 1;
+                    roundStartTime = Time.time;
+                }
+
+                PrepareRoundLogFile();
+            }
         }
 
         private IEnumerator ResetRoundAfterDelay()
@@ -335,19 +424,22 @@ namespace DeepAIArena
             GUILayout.Label($"Score  Player {leftScore} : {rightScore} Ghost");
             GUILayout.Label($"Item lane: {GetLaneName(item.transform.position.y)}");
             GUILayout.Label($"Ghost route: {(ghost != null ? ghost.DebugRouteName : "N/A")}");
+            var ghostController = ghost != null ? ghost.GetComponent<ArenaGhostController>() : null;
+            GUILayout.Label($"Ghost mode: {(ghostController != null ? ghostController.PolicyMode.ToString() : "N/A")}");
+            GUILayout.Label($"Ghost runtime: {(ghostController != null ? ghostController.RuntimeMode.ToString() : "N/A")}");
             GUILayout.Label("Controls: A/D or Left/Right to move, Space to jump.");
-            GUILayout.Label("Goal: grab the central item and bring it back to your base.");
+            GUILayout.Label("Goal: grab the upper item, escape downward, and reach the shared base.");
             GUILayout.EndArea();
         }
 
         private static string GetLaneName(float y)
         {
-            if (y > 2.4f)
+            if (y > 3.6f)
             {
                 return "Top";
             }
 
-            if (y < 1.4f)
+            if (y < -1.4f)
             {
                 return "Bottom";
             }
@@ -357,12 +449,12 @@ namespace DeepAIArena
 
         private static int GetLaneIndex(float y)
         {
-            if (y > 2.4f)
+            if (y > 3.6f)
             {
                 return 1;
             }
 
-            if (y < 1.4f)
+            if (y < -1.4f)
             {
                 return -1;
             }
