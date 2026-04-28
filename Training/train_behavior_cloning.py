@@ -7,7 +7,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, Dataset, random_split
 
-BASE_FEATURE_COUNT = 24
+BASE_FEATURE_COUNT = 21
 
 
 class ArenaDataset(Dataset):
@@ -18,8 +18,6 @@ class ArenaDataset(Dataset):
         self.feature_std = data["feature_std"].astype(np.float32)
         self.x = ((x - self.feature_mean) / self.feature_std).astype(np.float32)
         self.move = data["move"].astype(np.int64)
-        self.jump = data["jump"].astype(np.float32)
-        self.drop = data["drop"].astype(np.float32)
         self.shove = data["shove"].astype(np.float32)
 
     def __len__(self) -> int:
@@ -29,8 +27,6 @@ class ArenaDataset(Dataset):
         return (
             torch.from_numpy(self.x[index]),
             torch.tensor(self.move[index], dtype=torch.long),
-            torch.tensor(self.jump[index], dtype=torch.float32),
-            torch.tensor(self.drop[index], dtype=torch.float32),
             torch.tensor(self.shove[index], dtype=torch.float32),
         )
 
@@ -46,17 +42,13 @@ class BehaviorCloningModel(nn.Module):
             nn.Linear(hidden_size, hidden_size // 2),
             nn.ReLU(),
         )
-        self.move_head = nn.Linear(hidden_size // 2, 3)
-        self.jump_head = nn.Linear(hidden_size // 2, 1)
-        self.drop_head = nn.Linear(hidden_size // 2, 1)
+        self.move_head = nn.Linear(hidden_size // 2, 5)
         self.shove_head = nn.Linear(hidden_size // 2, 1)
 
     def forward(self, x):
         hidden = self.backbone(x)
         return {
             "move_logits": self.move_head(hidden),
-            "jump_logit": self.jump_head(hidden),
-            "drop_logit": self.drop_head(hidden),
             "shove_logit": self.shove_head(hidden),
         }
 
@@ -69,18 +61,14 @@ class TrainConfig:
     hidden_size: int
 
 
-def compute_loss(model_output, move_target, jump_target, drop_target, shove_target):
+def compute_loss(model_output, move_target, shove_target):
     ce = nn.CrossEntropyLoss()
     bce = nn.BCEWithLogitsLoss()
     move_loss = ce(model_output["move_logits"], move_target)
-    jump_loss = bce(model_output["jump_logit"].squeeze(-1), jump_target)
-    drop_loss = bce(model_output["drop_logit"].squeeze(-1), drop_target)
     shove_loss = bce(model_output["shove_logit"].squeeze(-1), shove_target)
-    total = move_loss + jump_loss + drop_loss + shove_loss
+    total = move_loss + shove_loss
     return total, {
         "move": move_loss.item(),
-        "jump": jump_loss.item(),
-        "drop": drop_loss.item(),
         "shove": shove_loss.item(),
     }
 
@@ -92,15 +80,13 @@ def evaluate(model, loader, device):
     total_count = 0
 
     with torch.no_grad():
-        for x, move, jump, drop, shove in loader:
+        for x, move, shove in loader:
             x = x.to(device)
             move = move.to(device)
-            jump = jump.to(device)
-            drop = drop.to(device)
             shove = shove.to(device)
 
             output = model(x)
-            loss, _ = compute_loss(output, move, jump, drop, shove)
+            loss, _ = compute_loss(output, move, shove)
             total_loss += loss.item() * x.size(0)
             total_move_correct += (output["move_logits"].argmax(dim=1) == move).sum().item()
             total_count += x.size(0)
@@ -143,16 +129,14 @@ def main() -> None:
 
     for epoch in range(config.epochs):
         model.train()
-        for x, move, jump, drop, shove in train_loader:
+        for x, move, shove in train_loader:
             x = x.to(device)
             move = move.to(device)
-            jump = jump.to(device)
-            drop = drop.to(device)
             shove = shove.to(device)
 
             optimizer.zero_grad()
             output = model(x)
-            loss, _ = compute_loss(output, move, jump, drop, shove)
+            loss, _ = compute_loss(output, move, shove)
             loss.backward()
             optimizer.step()
 

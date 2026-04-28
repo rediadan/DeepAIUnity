@@ -1,6 +1,5 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
-using System.Collections;
 
 namespace DeepAIArena
 {
@@ -8,18 +7,12 @@ namespace DeepAIArena
     [RequireComponent(typeof(CircleCollider2D))]
     public class ArenaCharacterController : MonoBehaviour
     {
-        [SerializeField] private float moveSpeed = 8f;
-        [SerializeField] private float jumpForce = 10f;
-        [SerializeField] private LayerMask groundMask = Physics2D.DefaultRaycastLayers;
-        [SerializeField] private float groundCheckDistance = 0.1f;
-        [SerializeField] private float groundCheckOriginOffset = -0.01f;
-        [SerializeField] private float wallCheckDistance = 0.08f;
-        [SerializeField] private float groundBelowCheckDistance = 0.7f;
-        [SerializeField] private float platformDropDistance = 0.2f;
-        [SerializeField] private float platformDropDuration = 0.3f;
+        [SerializeField] private float moveSpeed = 6.5f;
+        [SerializeField] private LayerMask obstacleMask = Physics2D.DefaultRaycastLayers;
+        [SerializeField] private float wallCheckDistance = 0.12f;
         [SerializeField] private ArenaSide side;
         [SerializeField] private bool isGhost;
-        [SerializeField] private float shoveRange = 0.65f;
+        [SerializeField] private float shoveRange = 0.75f;
         [SerializeField] private float shoveCooldown = 0.45f;
         [SerializeField] private float shoveForce = 4.5f;
 
@@ -27,18 +20,12 @@ namespace DeepAIArena
         private CircleCollider2D circleCollider;
         private ArenaItem carriedItem;
         private ArenaGameManager arenaGameManager;
-        private float moveInput;
-        private bool jumpRequested;
-        private bool dropRequested;
+        private Vector2 moveInput;
+        private Vector2 facingDirection = Vector2.right;
         private bool shoveRequested;
         private InputAction moveAction;
-        private InputAction jumpAction;
-        private InputAction downAction;
         private InputAction shoveAction;
-        private Coroutine dropCoroutine;
-        private Collider2D ignoredPlatform;
         private float lastShoveTime = -999f;
-        private float facingDirection = 1f;
 
         public ArenaSide Side
         {
@@ -51,6 +38,7 @@ namespace DeepAIArena
             get => isGhost;
             set => isGhost = value;
         }
+
         public bool HasItem => carriedItem != null;
         public Transform GroundCheck { get; set; }
         public string DebugRouteName { get; set; } = "Center";
@@ -61,6 +49,8 @@ namespace DeepAIArena
             body = GetComponent<Rigidbody2D>();
             circleCollider = GetComponent<CircleCollider2D>();
             this.arenaGameManager = arenaGameManager;
+            body.gravityScale = 0f;
+            body.freezeRotation = true;
         }
 
         private void OnEnable()
@@ -73,28 +63,16 @@ namespace DeepAIArena
             moveAction ??= new InputAction(
                 name: "Move",
                 type: InputActionType.Value,
-                binding: "<Gamepad>/leftStick/x");
-            moveAction.AddCompositeBinding("1DAxis")
-                .With("Negative", "<Keyboard>/a")
-                .With("Negative", "<Keyboard>/leftArrow")
-                .With("Positive", "<Keyboard>/d")
-                .With("Positive", "<Keyboard>/rightArrow");
-
-            jumpAction ??= new InputAction(
-                name: "Jump",
-                type: InputActionType.Button,
-                binding: "<Keyboard>/space");
-            jumpAction.AddBinding("<Keyboard>/w");
-            jumpAction.AddBinding("<Keyboard>/upArrow");
-            jumpAction.AddBinding("<Gamepad>/buttonSouth");
-
-            downAction ??= new InputAction(
-                name: "Drop",
-                type: InputActionType.Button,
-                binding: "<Keyboard>/s");
-            downAction.AddBinding("<Keyboard>/downArrow");
-            downAction.AddBinding("<Gamepad>/dpad/down");
-            downAction.AddBinding("<Gamepad>/leftStick/down");
+                binding: "<Gamepad>/leftStick");
+            moveAction.AddCompositeBinding("2DVector")
+                .With("Up", "<Keyboard>/w")
+                .With("Up", "<Keyboard>/upArrow")
+                .With("Down", "<Keyboard>/s")
+                .With("Down", "<Keyboard>/downArrow")
+                .With("Left", "<Keyboard>/a")
+                .With("Left", "<Keyboard>/leftArrow")
+                .With("Right", "<Keyboard>/d")
+                .With("Right", "<Keyboard>/rightArrow");
 
             shoveAction ??= new InputAction(
                 name: "Shove",
@@ -105,16 +83,12 @@ namespace DeepAIArena
             shoveAction.AddBinding("<Gamepad>/rightShoulder");
 
             moveAction.Enable();
-            jumpAction.Enable();
-            downAction.Enable();
             shoveAction.Enable();
         }
 
         private void OnDisable()
         {
             moveAction?.Disable();
-            jumpAction?.Disable();
-            downAction?.Disable();
             shoveAction?.Disable();
         }
 
@@ -125,18 +99,8 @@ namespace DeepAIArena
                 return;
             }
 
-            moveInput = moveAction != null ? moveAction.ReadValue<float>() : 0f;
+            moveInput = moveAction != null ? Vector2.ClampMagnitude(moveAction.ReadValue<Vector2>(), 1f) : Vector2.zero;
             UpdateFacingDirection(moveInput);
-            if (jumpAction != null && jumpAction.WasPressedThisFrame())
-            {
-                jumpRequested = true;
-            }
-
-            if (downAction != null && downAction.WasPressedThisFrame())
-            {
-                dropRequested = true;
-            }
-
             if (shoveAction != null && shoveAction.WasPressedThisFrame())
             {
                 shoveRequested = true;
@@ -150,55 +114,27 @@ namespace DeepAIArena
                 return;
             }
 
-            var horizontalVelocity = moveInput * moveSpeed;
-            if (IsBlockedByWall(moveInput))
-            {
-                horizontalVelocity = 0f;
-            }
-
-            body.linearVelocity = new Vector2(horizontalVelocity, body.linearVelocity.y);
-
-            if (jumpRequested && IsGrounded())
-            {
-                body.linearVelocity = new Vector2(body.linearVelocity.x, jumpForce);
-            }
-
-            if (dropRequested)
-            {
-                TryDropThroughPlatform();
-            }
+            var desiredInput = IsBlockedByWall(moveInput) ? Vector2.zero : moveInput;
+            body.linearVelocity = desiredInput * moveSpeed;
 
             if (shoveRequested)
             {
                 TryShove();
             }
 
-            jumpRequested = false;
-            dropRequested = false;
             shoveRequested = false;
         }
 
-        public void SetGhostInput(float horizontal, bool jump, bool drop, bool shove, string routeName)
+        public void SetGhostInput(Vector2 move, bool shove, string routeName)
         {
             if (!IsGhost)
             {
                 return;
             }
 
-            moveInput = Mathf.Clamp(horizontal, -1f, 1f);
+            moveInput = Vector2.ClampMagnitude(move, 1f);
             UpdateFacingDirection(moveInput);
             DebugRouteName = routeName;
-
-            if (jump)
-            {
-                jumpRequested = true;
-            }
-
-            if (drop)
-            {
-                dropRequested = true;
-            }
-
             if (shove)
             {
                 shoveRequested = true;
@@ -207,52 +143,17 @@ namespace DeepAIArena
 
         public bool IsGrounded()
         {
-            circleCollider ??= GetComponent<CircleCollider2D>();
-            if (circleCollider == null)
-            {
-                return false;
-            }
-
-            var bounds = circleCollider.bounds;
-            var origin = new Vector2(bounds.center.x, bounds.min.y + groundCheckOriginOffset);
-            var hit = Physics2D.Raycast(origin, Vector2.down, groundCheckDistance, groundMask);
-            return hit.collider != null
-                && hit.collider != ignoredPlatform
-                && !hit.transform.IsChildOf(transform)
-                && hit.distance <= groundCheckDistance;
+            return true;
         }
 
         public bool HasGroundBelow()
         {
-            circleCollider ??= GetComponent<CircleCollider2D>();
-            if (circleCollider == null)
-            {
-                return false;
-            }
-
-            var bounds = circleCollider.bounds;
-            var origin = new Vector2(bounds.center.x, bounds.min.y + groundCheckOriginOffset);
-            var hit = Physics2D.Raycast(origin, Vector2.down, groundBelowCheckDistance, groundMask);
-            return hit.collider != null
-                && hit.collider != ignoredPlatform
-                && !hit.transform.IsChildOf(transform);
+            return true;
         }
 
         public bool CanDropDown()
         {
-            circleCollider ??= GetComponent<CircleCollider2D>();
-            if (circleCollider == null || !IsGrounded())
-            {
-                return false;
-            }
-
-            var bounds = circleCollider.bounds;
-            var origin = new Vector2(bounds.center.x, bounds.min.y + groundCheckOriginOffset);
-            var hit = Physics2D.Raycast(origin, Vector2.down, platformDropDistance, groundMask);
-            return hit.collider != null
-                && !hit.transform.IsChildOf(transform)
-                && hit.collider.TryGetComponent(out ArenaPlatform platform)
-                && platform.AllowDropFromAbove;
+            return false;
         }
 
         public bool IsWallAhead()
@@ -260,9 +161,9 @@ namespace DeepAIArena
             return IsBlockedByWall(facingDirection);
         }
 
-        private bool IsBlockedByWall(float horizontalInput)
+        public bool IsBlockedByWall(Vector2 inputDirection)
         {
-            if (Mathf.Abs(horizontalInput) < 0.01f)
+            if (inputDirection.sqrMagnitude < 0.0001f)
             {
                 return false;
             }
@@ -273,51 +174,10 @@ namespace DeepAIArena
                 return false;
             }
 
-            var bounds = circleCollider.bounds;
-            var origin = bounds.center;
-            var radius = Mathf.Max(bounds.extents.y * 0.45f, 0.05f);
-            var direction = horizontalInput > 0f ? Vector2.right : Vector2.left;
-            var hit = Physics2D.CircleCast(origin, radius, direction, wallCheckDistance, groundMask);
-
-            return hit.collider != null
-                && hit.collider != ignoredPlatform
-                && !hit.transform.IsChildOf(transform);
-        }
-
-        private void TryDropThroughPlatform()
-        {
-            if (!IsGrounded() || circleCollider == null || dropCoroutine != null)
-            {
-                return;
-            }
-
-            var bounds = circleCollider.bounds;
-            var origin = new Vector2(bounds.center.x, bounds.min.y + groundCheckOriginOffset);
-            var hit = Physics2D.Raycast(origin, Vector2.down, platformDropDistance, groundMask);
-            if (hit.collider == null || hit.transform.IsChildOf(transform))
-            {
-                return;
-            }
-
-            if (!hit.collider.TryGetComponent(out ArenaPlatform platform) || !platform.AllowDropFromAbove)
-            {
-                return;
-            }
-
-            dropCoroutine = StartCoroutine(DropThroughPlatformRoutine(hit.collider));
-        }
-
-        private IEnumerator DropThroughPlatformRoutine(Collider2D platformCollider)
-        {
-            ignoredPlatform = platformCollider;
-            Physics2D.IgnoreCollision(circleCollider, platformCollider, true);
-            body.linearVelocity = new Vector2(body.linearVelocity.x, Mathf.Min(body.linearVelocity.y, -2f));
-
-            yield return new WaitForSeconds(platformDropDuration);
-
-            Physics2D.IgnoreCollision(circleCollider, platformCollider, false);
-            ignoredPlatform = null;
-            dropCoroutine = null;
+            var direction = inputDirection.normalized;
+            var radius = Mathf.Max(circleCollider.radius * transform.lossyScale.x * 0.65f, 0.08f);
+            var hit = Physics2D.CircleCast(transform.position, radius, direction, wallCheckDistance, obstacleMask);
+            return hit.collider != null && !hit.transform.IsChildOf(transform) && !hit.collider.isTrigger;
         }
 
         private void TryShove()
@@ -369,34 +229,18 @@ namespace DeepAIArena
 
         private void OnDrawGizmosSelected()
         {
-            var activeCollider = circleCollider != null ? circleCollider : GetComponent<CircleCollider2D>();
-            if (activeCollider == null)
-            {
-                return;
-            }
-
-            var bounds = activeCollider.bounds;
-            var origin = new Vector3(bounds.center.x, bounds.min.y + groundCheckOriginOffset, transform.position.z);
-            var end = origin + Vector3.down * groundCheckDistance;
-
-            Gizmos.color = IsGrounded() ? Color.green : Color.red;
-            Gizmos.DrawSphere(origin, 0.03f);
-            Gizmos.DrawLine(origin, end);
-            Gizmos.DrawSphere(end, 0.025f);
-
             Gizmos.color = Color.yellow;
             Gizmos.DrawWireSphere(transform.position, shoveRange);
+
+            Gizmos.color = IsWallAhead() ? Color.red : Color.green;
+            Gizmos.DrawLine(transform.position, (Vector2)transform.position + facingDirection.normalized * wallCheckDistance);
         }
 
-        private void UpdateFacingDirection(float horizontalInput)
+        private void UpdateFacingDirection(Vector2 input)
         {
-            if (horizontalInput > 0.01f)
+            if (input.sqrMagnitude > 0.0001f)
             {
-                facingDirection = 1f;
-            }
-            else if (horizontalInput < -0.01f)
-            {
-                facingDirection = -1f;
+                facingDirection = input.normalized;
             }
         }
 
@@ -420,21 +264,9 @@ namespace DeepAIArena
 
         public ArenaActionSnapshot GetCurrentActionSnapshot()
         {
-            var moveActionSnapshot = ArenaMoveAction.Idle;
-            if (moveInput < -0.1f)
-            {
-                moveActionSnapshot = ArenaMoveAction.MoveLeft;
-            }
-            else if (moveInput > 0.1f)
-            {
-                moveActionSnapshot = ArenaMoveAction.MoveRight;
-            }
-
             return new ArenaActionSnapshot
             {
-                moveAction = moveActionSnapshot,
-                jumpPressed = jumpRequested,
-                dropPressed = dropRequested,
+                moveAction = ToMoveAction(moveInput),
                 shovePressed = shoveRequested,
                 routeName = DebugRouteName
             };
@@ -447,8 +279,8 @@ namespace DeepAIArena
                 return;
             }
 
-            var dropDirection = moveInput < -0.1f ? Vector3.left : Vector3.right;
-            carriedItem.DropToWorld(this, transform.position + Vector3.up * 0.25f + dropDirection * 0.35f);
+            var dropDirection = moveInput.sqrMagnitude > 0.0001f ? moveInput.normalized : facingDirection.normalized;
+            carriedItem.DropToWorld(this, transform.position + (Vector3)(dropDirection * 0.45f));
             carriedItem = null;
         }
 
@@ -460,9 +292,10 @@ namespace DeepAIArena
                 body = GetComponent<Rigidbody2D>();
             }
 
+            body.gravityScale = 0f;
             body.linearVelocity = Vector2.zero;
-            moveInput = 0f;
-            jumpRequested = false;
+            moveInput = Vector2.zero;
+            shoveRequested = false;
             carriedItem = null;
         }
 
@@ -472,6 +305,21 @@ namespace DeepAIArena
             {
                 PickupItem(arenaItem);
             }
+        }
+
+        private static ArenaMoveAction ToMoveAction(Vector2 input)
+        {
+            if (input.sqrMagnitude < 0.01f)
+            {
+                return ArenaMoveAction.Idle;
+            }
+
+            if (Mathf.Abs(input.x) >= Mathf.Abs(input.y))
+            {
+                return input.x < 0f ? ArenaMoveAction.MoveLeft : ArenaMoveAction.MoveRight;
+            }
+
+            return input.y < 0f ? ArenaMoveAction.MoveDown : ArenaMoveAction.MoveUp;
         }
     }
 }

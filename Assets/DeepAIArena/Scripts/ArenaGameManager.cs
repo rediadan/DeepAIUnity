@@ -14,6 +14,8 @@ namespace DeepAIArena
     public enum ArenaMoveAction
     {
         Idle,
+        MoveUp,
+        MoveDown,
         MoveLeft,
         MoveRight
     }
@@ -34,6 +36,16 @@ namespace DeepAIArena
         Opponent = 2
     }
 
+    public enum ArenaDqnAction
+    {
+        Idle = 0,
+        MoveUp = 1,
+        MoveDown = 2,
+        MoveLeft = 3,
+        MoveRight = 4,
+        Shove = 5
+    }
+
     [System.Serializable]
     public struct ArenaObservationSnapshot
     {
@@ -43,15 +55,12 @@ namespace DeepAIArena
         public Vector2 basePosition;
         public bool selfHasItem;
         public bool opponentHasItem;
-        public bool isGrounded;
-        public bool canDropDown;
         public Vector2 itemDelta;
         public Vector2 baseDelta;
         public Vector2 opponentDelta;
         public Vector2 targetPosition;
         public ArenaTargetType targetType;
         public bool wallAhead;
-        public bool hasGroundBelow;
         public float roundElapsedTime;
     }
 
@@ -59,8 +68,6 @@ namespace DeepAIArena
     public struct ArenaActionSnapshot
     {
         public ArenaMoveAction moveAction;
-        public bool jumpPressed;
-        public bool dropPressed;
         public bool shovePressed;
         public string routeName;
     }
@@ -76,13 +83,27 @@ namespace DeepAIArena
         public string note;
     }
 
+    [System.Serializable]
+    public struct ArenaDqnTransitionLog
+    {
+        public string transitionType;
+        public string actorSide;
+        public int roundIndex;
+        public float timestamp;
+        public ArenaObservationSnapshot state;
+        public ArenaDqnAction action;
+        public float reward;
+        public ArenaObservationSnapshot nextState;
+        public bool done;
+    }
+
     public class ArenaGameManager : MonoBehaviour
     {
         private readonly Vector3[] itemSpawnPoints =
         {
-            new Vector3(0f, 4.6f, 0f),
-            new Vector3(-0.55f, 4.45f, 0f),
-            new Vector3(0.55f, 4.45f, 0f)
+            new Vector3(0f, 0f, 0f),
+            new Vector3(0f, 3.25f, 0f),
+            new Vector3(0f, -2.3f, 0f)
         };
 
         [SerializeField] private ArenaCharacterController player;
@@ -91,6 +112,10 @@ namespace DeepAIArena
         [SerializeField] private ArenaBaseZone sharedBase;
         [SerializeField] private bool writeLogsToFile = true;
         [SerializeField] private string outputDirectoryName = "arena_training_rounds";
+        [SerializeField] private bool writeDqnTransitions = true;
+        [SerializeField] private float dqnStepPenalty = -0.01f;
+        [SerializeField] private float dqnTargetProgressRewardScale = 0.05f;
+        [SerializeField] private float dqnWallActionPenalty = -0.02f;
 
         private int leftScore;
         private int rightScore;
@@ -99,6 +124,11 @@ namespace DeepAIArena
         private float roundStartTime;
         private string outputDirectoryPath;
         private string currentRoundOutputPath;
+        private float pendingLeftDqnReward;
+        private float pendingRightDqnReward;
+        private bool hasPreviousPlayerDqnStep;
+        private ArenaObservationSnapshot previousPlayerObservation;
+        private ArenaActionSnapshot previousPlayerAction;
 
         public ArenaCharacterController Player => player;
         public ArenaCharacterController Ghost => ghost;
@@ -208,12 +238,12 @@ namespace DeepAIArena
 
         public Vector3 GetSpawnPoint(ArenaSide side)
         {
-            return side == ArenaSide.Left ? new Vector3(-9.75f, 5.15f, 0f) : new Vector3(9.75f, 5.15f, 0f);
+            return side == ArenaSide.Left ? new Vector3(-8.8f, 0f, 0f) : new Vector3(8.8f, 0f, 0f);
         }
 
         public Vector3 GetSharedBasePoint()
         {
-            return sharedBase != null ? sharedBase.transform.position : new Vector3(0f, -4.1f, 0f);
+            return sharedBase != null ? sharedBase.transform.position : new Vector3(0f, -4.45f, 0f);
         }
 
         public void Deliver(ArenaCharacterController controller)
@@ -245,6 +275,9 @@ namespace DeepAIArena
             roundTransition = false;
             roundIndex++;
             roundStartTime = Time.time;
+            pendingLeftDqnReward = 0f;
+            pendingRightDqnReward = 0f;
+            hasPreviousPlayerDqnStep = false;
             PrepareRoundLogFile();
 
             player.ResetActor(GetSpawnPoint(ArenaSide.Left));
@@ -261,7 +294,10 @@ namespace DeepAIArena
                 return;
             }
 
-            LogStep(ArenaSide.Left, roundIndex, BuildObservation(ArenaSide.Left), player.GetCurrentActionSnapshot());
+            var observation = BuildObservation(ArenaSide.Left);
+            var action = player.GetCurrentActionSnapshot();
+            LogStep(ArenaSide.Left, roundIndex, observation, action);
+            LogDqnTransitionIfReady(observation, action);
         }
 
         public ArenaObservationSnapshot BuildObservation(ArenaSide side)
@@ -280,15 +316,12 @@ namespace DeepAIArena
                 basePosition = basePosition,
                 selfHasItem = self.HasItem,
                 opponentHasItem = opponent.HasItem,
-                isGrounded = self.IsGrounded(),
-                canDropDown = self.CanDropDown(),
                 itemDelta = (Vector2)item.transform.position - (Vector2)self.transform.position,
                 baseDelta = basePosition - (Vector2)self.transform.position,
                 opponentDelta = (Vector2)opponent.transform.position - (Vector2)self.transform.position,
                 targetPosition = targetPosition,
                 targetType = targetType,
                 wallAhead = self.IsWallAhead(),
-                hasGroundBelow = self.HasGroundBelow(),
                 roundElapsedTime = Time.time - roundStartTime
             };
         }
@@ -337,6 +370,8 @@ namespace DeepAIArena
                 note = note
             };
 
+            AddPendingDqnReward(actorSide, rewardDelta);
+
             var json = JsonUtility.ToJson(rewardEvent);
             File.AppendAllText(currentRoundOutputPath, json + "\n", Encoding.UTF8);
         }
@@ -364,6 +399,132 @@ namespace DeepAIArena
             });
 
             File.AppendAllText(currentRoundOutputPath, json + "\n", Encoding.UTF8);
+        }
+
+        private void LogDqnTransitionIfReady(ArenaObservationSnapshot currentObservation, ArenaActionSnapshot currentAction)
+        {
+            if (!writeLogsToFile || !writeDqnTransitions)
+            {
+                StorePreviousPlayerDqnStep(currentObservation, currentAction);
+                return;
+            }
+
+            if (hasPreviousPlayerDqnStep)
+            {
+                var reward = ConsumePendingDqnReward(ArenaSide.Left)
+                    + ComputeShapingReward(previousPlayerObservation, currentObservation, previousPlayerAction);
+                var done = roundTransition;
+                var transition = new ArenaDqnTransitionLog
+                {
+                    transitionType = "DqnTransition",
+                    actorSide = ArenaSide.Left.ToString(),
+                    roundIndex = roundIndex,
+                    timestamp = Time.time - roundStartTime,
+                    state = previousPlayerObservation,
+                    action = ToDqnAction(previousPlayerAction),
+                    reward = reward,
+                    nextState = currentObservation,
+                    done = done
+                };
+
+                var json = JsonUtility.ToJson(transition);
+                File.AppendAllText(currentRoundOutputPath, json + "\n", Encoding.UTF8);
+
+                if (done)
+                {
+                    hasPreviousPlayerDqnStep = false;
+                    return;
+                }
+            }
+
+            StorePreviousPlayerDqnStep(currentObservation, currentAction);
+        }
+
+        private void StorePreviousPlayerDqnStep(ArenaObservationSnapshot observation, ArenaActionSnapshot action)
+        {
+            previousPlayerObservation = observation;
+            previousPlayerAction = action;
+            hasPreviousPlayerDqnStep = true;
+        }
+
+        private void AddPendingDqnReward(ArenaSide side, float rewardDelta)
+        {
+            if (side == ArenaSide.Left)
+            {
+                pendingLeftDqnReward += rewardDelta;
+            }
+            else
+            {
+                pendingRightDqnReward += rewardDelta;
+            }
+        }
+
+        private float ConsumePendingDqnReward(ArenaSide side)
+        {
+            if (side == ArenaSide.Left)
+            {
+                var reward = pendingLeftDqnReward;
+                pendingLeftDqnReward = 0f;
+                return reward;
+            }
+
+            var rightReward = pendingRightDqnReward;
+            pendingRightDqnReward = 0f;
+            return rightReward;
+        }
+
+        private float ComputeShapingReward(
+            ArenaObservationSnapshot previousObservation,
+            ArenaObservationSnapshot currentObservation,
+            ArenaActionSnapshot previousAction)
+        {
+            var previousDistance = Vector2.Distance(previousObservation.selfPosition, previousObservation.targetPosition);
+            var currentDistance = Vector2.Distance(currentObservation.selfPosition, currentObservation.targetPosition);
+            var progressReward = Mathf.Clamp(
+                (previousDistance - currentDistance) * dqnTargetProgressRewardScale,
+                -0.1f,
+                0.1f);
+            var wallPenalty = previousObservation.wallAhead
+                && previousAction.moveAction != ArenaMoveAction.Idle
+                ? dqnWallActionPenalty
+                : 0f;
+
+            return dqnStepPenalty + progressReward + wallPenalty;
+        }
+
+        private static ArenaDqnAction ToDqnAction(ArenaActionSnapshot action)
+        {
+            var movingLeft = action.moveAction == ArenaMoveAction.MoveLeft;
+            var movingRight = action.moveAction == ArenaMoveAction.MoveRight;
+            var movingUp = action.moveAction == ArenaMoveAction.MoveUp;
+            var movingDown = action.moveAction == ArenaMoveAction.MoveDown;
+
+            if (action.shovePressed)
+            {
+                return ArenaDqnAction.Shove;
+            }
+
+            if (movingUp)
+            {
+                return ArenaDqnAction.MoveUp;
+            }
+
+            if (movingDown)
+            {
+                return ArenaDqnAction.MoveDown;
+            }
+
+            if (movingLeft)
+            {
+                return ArenaDqnAction.MoveLeft;
+            }
+
+            if (movingRight)
+            {
+                return ArenaDqnAction.MoveRight;
+            }
+
+            return ArenaDqnAction.Idle;
         }
 
         private void PrepareRoundLogFile()
@@ -427,19 +588,19 @@ namespace DeepAIArena
             var ghostController = ghost != null ? ghost.GetComponent<ArenaGhostController>() : null;
             GUILayout.Label($"Ghost mode: {(ghostController != null ? ghostController.PolicyMode.ToString() : "N/A")}");
             GUILayout.Label($"Ghost runtime: {(ghostController != null ? ghostController.RuntimeMode.ToString() : "N/A")}");
-            GUILayout.Label("Controls: A/D or Left/Right to move, Space to jump.");
-            GUILayout.Label("Goal: grab the upper item, escape downward, and reach the shared base.");
+            GUILayout.Label("Controls: WASD or arrows to move, Ctrl/E to shove.");
+            GUILayout.Label("Goal: grab one of three items and reach the shared base.");
             GUILayout.EndArea();
         }
 
         private static string GetLaneName(float y)
         {
-            if (y > 3.6f)
+            if (y > 1.4f)
             {
                 return "Top";
             }
 
-            if (y < -1.4f)
+            if (y < -1.2f)
             {
                 return "Bottom";
             }
@@ -449,12 +610,12 @@ namespace DeepAIArena
 
         private static int GetLaneIndex(float y)
         {
-            if (y > 3.6f)
+            if (y > 1.4f)
             {
                 return 1;
             }
 
-            if (y < -1.4f)
+            if (y < -1.2f)
             {
                 return -1;
             }

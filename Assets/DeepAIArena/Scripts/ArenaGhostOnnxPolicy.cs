@@ -9,9 +9,7 @@ namespace DeepAIArena
     [Serializable]
     public struct ArenaGhostModelAction
     {
-        public float horizontal;
-        public bool jump;
-        public bool drop;
+        public Vector2 move;
         public bool shove;
         public string routeName;
     }
@@ -25,13 +23,11 @@ namespace DeepAIArena
 
     public class ArenaGhostOnnxPolicy : MonoBehaviour
     {
-        private const int BaseFeatureCount = 24;
+        private const int BaseFeatureCount = 21;
 
         [SerializeField] private UnityEngine.Object modelAsset;
         [SerializeField] private TextAsset normalizationStats;
         [SerializeField] private bool preferGpu = true;
-        [SerializeField] private float jumpThreshold = 0.5f;
-        [SerializeField] private float dropThreshold = 0.5f;
         [SerializeField] private float shoveThreshold = 0.5f;
         [SerializeField] private bool verboseLogging;
         [SerializeField] private int sequenceLength = 4;
@@ -78,36 +74,22 @@ namespace DeepAIArena
                 scheduleMethod.Invoke(workerInstance, new[] { inputTensor });
 
                 var moveTensor = peekOutputMethod.Invoke(workerInstance, new object[] { "move_logits" });
-                var jumpTensor = peekOutputMethod.Invoke(workerInstance, new object[] { "jump_prob" });
-                var dropTensor = peekOutputMethod.Invoke(workerInstance, new object[] { "drop_prob" });
                 var shoveTensor = peekOutputMethod.Invoke(workerInstance, new object[] { "shove_prob" });
 
                 var moveLogits = ReadTensor(moveTensor);
-                var jumpProb = ReadTensor(jumpTensor);
-                var dropProb = ReadTensor(dropTensor);
                 var shoveProb = ReadTensor(shoveTensor);
 
                 var moveIndex = ArgMax(moveLogits);
-                var isRightSideActor = transform.position.x > 0f;
-                var horizontal = moveIndex switch
-                {
-                    1 => -1f,
-                    2 => 1f,
-                    _ => 0f
-                };
-                if (isRightSideActor)
-                {
-                    horizontal *= -1f;
-                }
+                var isRightSideActor = IsRightSideActor(observation);
+                var move = ToMoveVector((ArenaMoveAction)moveIndex, isRightSideActor);
 
                 action = new ArenaGhostModelAction
                 {
-                    horizontal = horizontal,
-                    jump = jumpProb.Length > 0 && jumpProb[0] >= jumpThreshold,
-                    drop = dropProb.Length > 0 && dropProb[0] >= dropThreshold,
+                    move = move,
                     shove = shoveProb.Length > 0 && shoveProb[0] >= shoveThreshold,
                     routeName = "Model"
                 };
+                action = ApplyTargetDirectionGuard(action, observation);
 
                 return true;
             }
@@ -269,6 +251,57 @@ namespace DeepAIArena
             }
         }
 
+        public bool TryEvaluateDqn(ArenaObservationSnapshot observation, out ArenaGhostModelAction action)
+        {
+            action = default;
+
+            if (!EnsureInitialized())
+            {
+                return false;
+            }
+
+            var normalized = BuildNormalizedObservation(observation);
+            var inputTensor = CreateInputTensor(normalized);
+            if (inputTensor == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                scheduleMethod.Invoke(workerInstance, new[] { inputTensor });
+
+                var qValueTensor = peekOutputMethod.Invoke(workerInstance, new object[] { "q_values" });
+                var qValues = ReadTensor(qValueTensor);
+                if (qValues.Length == 0)
+                {
+                    Debug.LogWarning("DQN ONNX output 'q_values' was empty.", this);
+                    return false;
+                }
+
+                var actionIndex = ArgMax(qValues);
+                var dqnAction = Enum.IsDefined(typeof(ArenaDqnAction), actionIndex)
+                    ? (ArenaDqnAction)actionIndex
+                    : ArenaDqnAction.Idle;
+                var isRightSideActor = IsRightSideActor(observation);
+                action = ToGhostModelAction(dqnAction, isRightSideActor);
+                action = ApplyTargetDirectionGuard(action, observation);
+                return true;
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning($"DQN Ghost inference failed: {DescribeException(exception)}", this);
+                DisposeWorker();
+                attemptedInitialization = false;
+                initializationSucceeded = false;
+                return false;
+            }
+            finally
+            {
+                DisposeTensor(inputTensor);
+            }
+        }
+
         private object LoadRuntimeModel(ArenaInferenceRuntime runtime)
         {
             var loadMethod = runtime.modelLoaderType.GetMethods(BindingFlags.Public | BindingFlags.Static)
@@ -407,7 +440,7 @@ namespace DeepAIArena
 
         private float[] BuildNormalizedObservation(ArenaObservationSnapshot observation)
         {
-            var isRightSideActor = transform.position.x > 0f;
+            var isRightSideActor = IsRightSideActor(observation);
             var mirroredSelfPositionX = MirrorX(observation.selfPosition.x, isRightSideActor);
             var mirroredOpponentPositionX = MirrorX(observation.opponentPosition.x, isRightSideActor);
             var mirroredItemPositionX = MirrorX(observation.itemPosition.x, isRightSideActor);
@@ -429,8 +462,6 @@ namespace DeepAIArena
                 observation.basePosition.y,
                 observation.selfHasItem ? 1f : 0f,
                 observation.opponentHasItem ? 1f : 0f,
-                observation.isGrounded ? 1f : 0f,
-                observation.canDropDown ? 1f : 0f,
                 mirroredItemDeltaX,
                 observation.itemDelta.y,
                 mirroredBaseDeltaX,
@@ -441,7 +472,6 @@ namespace DeepAIArena
                 observation.targetPosition.y,
                 (float)observation.targetType,
                 observation.wallAhead ? 1f : 0f,
-                observation.hasGroundBelow ? 1f : 0f,
                 observation.roundElapsedTime
             };
 
@@ -644,6 +674,11 @@ namespace DeepAIArena
             return shouldMirror ? -value : value;
         }
 
+        private static bool IsRightSideActor(ArenaObservationSnapshot observation)
+        {
+            return observation.selfPosition.x > 0f;
+        }
+
         private float[] ReadTensor(object tensorInstance)
         {
             if (tensorInstance == null)
@@ -716,6 +751,86 @@ namespace DeepAIArena
             }
 
             return bestIndex;
+        }
+
+        private static ArenaGhostModelAction ToGhostModelAction(ArenaDqnAction action, bool mirrorHorizontal)
+        {
+            var modelAction = new ArenaGhostModelAction
+            {
+                routeName = $"DQN:{action}"
+            };
+
+            switch (action)
+            {
+                case ArenaDqnAction.MoveUp:
+                    modelAction.move = Vector2.up;
+                    break;
+                case ArenaDqnAction.MoveDown:
+                    modelAction.move = Vector2.down;
+                    break;
+                case ArenaDqnAction.MoveLeft:
+                    modelAction.move = Vector2.left;
+                    break;
+                case ArenaDqnAction.MoveRight:
+                    modelAction.move = Vector2.right;
+                    break;
+                case ArenaDqnAction.Shove:
+                    modelAction.shove = true;
+                    break;
+            }
+
+            if (mirrorHorizontal)
+            {
+                modelAction.move.x *= -1f;
+            }
+
+            return modelAction;
+        }
+
+        private static ArenaGhostModelAction ApplyTargetDirectionGuard(
+            ArenaGhostModelAction action,
+            ArenaObservationSnapshot observation)
+        {
+            var targetDelta = observation.targetPosition - observation.selfPosition;
+            if (targetDelta.magnitude < 0.35f)
+            {
+                return action;
+            }
+
+            var shouldForceObjectiveMovement = observation.selfHasItem || observation.opponentHasItem;
+            if (!shouldForceObjectiveMovement && action.move.sqrMagnitude < 0.0001f)
+            {
+                return action;
+            }
+
+            var targetDirection = targetDelta.normalized;
+            if (Vector2.Dot(action.move.normalized, targetDirection) > 0.25f)
+            {
+                return action;
+            }
+
+            action.move = targetDirection;
+            action.routeName += shouldForceObjectiveMovement ? ":ObjectiveGuarded" : ":Guarded";
+            return action;
+        }
+
+        private static Vector2 ToMoveVector(ArenaMoveAction moveAction, bool mirrorHorizontal)
+        {
+            var move = moveAction switch
+            {
+                ArenaMoveAction.MoveUp => Vector2.up,
+                ArenaMoveAction.MoveDown => Vector2.down,
+                ArenaMoveAction.MoveLeft => Vector2.left,
+                ArenaMoveAction.MoveRight => Vector2.right,
+                _ => Vector2.zero
+            };
+
+            if (mirrorHorizontal)
+            {
+                move.x *= -1f;
+            }
+
+            return move;
         }
 
         private static bool TryResolveInferenceRuntime(out ArenaInferenceRuntime runtime)

@@ -27,25 +27,37 @@ namespace DeepAIArena.Editor
             {
                 case ArenaGhostPolicyMode.RuleBased:
                     EditorGUILayout.HelpBox(
-                        "Rule-Based: 플레이어 로그를 수집할 때 쓰는 기본 Ghost입니다. 수작업 규칙으로 이동, 점프, 드롭, 밀치기를 결정합니다.",
+                        "Rule-Based: handcrafted Ghost logic. Use this when collecting player logs for BC or DQN datasets.",
                         MessageType.Info);
                     break;
 
                 case ArenaGhostPolicyMode.OnnxInference:
                     EditorGUILayout.HelpBox(
-                        "ONNX Input: 학습된 ONNX 모델로 Ghost를 움직입니다. 테스트나 비교 평가에 사용하면 됩니다.",
+                        "ONNX Inference: runs the Behavior Cloning model. Expected outputs are move_logits and shove_prob.",
                         MessageType.Info);
-                    EditorGUILayout.PropertyField(onnxPolicyProperty, new GUIContent("ONNX Policy"));
-                    if (onnxPolicyProperty.objectReferenceValue == null)
-                    {
-                        EditorGUILayout.HelpBox(
-                            "같은 오브젝트의 ArenaGhostOnnxPolicy를 연결하고, 그 안에 ONNX와 stats JSON을 넣어야 합니다.",
-                            MessageType.Warning);
-                    }
+                    DrawPolicyField("BC ONNX Policy");
+                    break;
+
+                case ArenaGhostPolicyMode.DqnInference:
+                    EditorGUILayout.HelpBox(
+                        "DQN Inference: runs the DQN model. Expected output is q_values, and the highest Q-value action is converted to Ghost input.",
+                        MessageType.Info);
+                    DrawPolicyField("DQN ONNX Policy");
                     break;
             }
 
             serializedObject.ApplyModifiedProperties();
+        }
+
+        private void DrawPolicyField(string label)
+        {
+            EditorGUILayout.PropertyField(onnxPolicyProperty, new GUIContent(label));
+            if (onnxPolicyProperty.objectReferenceValue == null)
+            {
+                EditorGUILayout.HelpBox(
+                    "Assign an ArenaGhostOnnxPolicy component and set its ONNX model plus stats JSON.",
+                    MessageType.Warning);
+            }
         }
     }
 }

@@ -17,17 +17,13 @@ class BehaviorCloningExportModel(nn.Module):
             nn.Linear(hidden_size, hidden_size // 2),
             nn.ReLU(),
         )
-        self.move_head = nn.Linear(hidden_size // 2, 3)
-        self.jump_head = nn.Linear(hidden_size // 2, 1)
-        self.drop_head = nn.Linear(hidden_size // 2, 1)
+        self.move_head = nn.Linear(hidden_size // 2, 5)
         self.shove_head = nn.Linear(hidden_size // 2, 1)
 
     def forward(self, x):
         hidden = self.backbone(x)
         return (
             self.move_head(hidden),
-            torch.sigmoid(self.jump_head(hidden)),
-            torch.sigmoid(self.drop_head(hidden)),
             torch.sigmoid(self.shove_head(hidden)),
         )
 
@@ -60,7 +56,7 @@ def main() -> None:
         dummy,
         output_path,
         input_names=["observation"],
-        output_names=["move_logits", "jump_prob", "drop_prob", "shove_prob"],
+        output_names=["move_logits", "shove_prob"],
         dynamic_axes={"observation": {0: "batch"}},
         opset_version=17,
     )

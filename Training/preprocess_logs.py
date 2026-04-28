@@ -17,8 +17,6 @@ def build_feature_vector(observation: dict) -> list[float]:
         observation["basePosition"]["y"],
         1.0 if observation["selfHasItem"] else 0.0,
         1.0 if observation["opponentHasItem"] else 0.0,
-        1.0 if observation["isGrounded"] else 0.0,
-        1.0 if observation["canDropDown"] else 0.0,
         observation["itemDelta"]["x"],
         observation["itemDelta"]["y"],
         observation["baseDelta"]["x"],
@@ -29,15 +27,16 @@ def build_feature_vector(observation: dict) -> list[float]:
         observation["targetPosition"]["y"],
         float(observation["targetType"]),
         1.0 if observation["wallAhead"] else 0.0,
-        1.0 if observation["hasGroundBelow"] else 0.0,
         float(observation.get("roundElapsedTime", 0.0)),
     ]
 
 
 MOVE_TO_INDEX = {
     "Idle": 0,
-    "MoveLeft": 1,
-    "MoveRight": 2,
+    "MoveUp": 1,
+    "MoveDown": 2,
+    "MoveLeft": 3,
+    "MoveRight": 4,
 }
 
 
@@ -86,8 +85,6 @@ def downsample_idle_rows(rows: list[dict], keep_ratio: float) -> list[dict]:
         move_action = normalize_move_action(action["moveAction"])
         is_idle = (
             move_action == MOVE_TO_INDEX["Idle"]
-            and not action["jumpPressed"]
-            and not action["dropPressed"]
             and not action.get("shovePressed", False)
         )
         if not is_idle or rng.random() <= keep_ratio:
@@ -131,8 +128,6 @@ def main() -> None:
 
     features = []
     move_targets = []
-    jump_targets = []
-    drop_targets = []
     shove_targets = []
     processed_rounds = 0
 
@@ -150,8 +145,6 @@ def main() -> None:
 
         for action in sequence_actions:
             move_targets.append(normalize_move_action(action["moveAction"]))
-            jump_targets.append(1.0 if action["jumpPressed"] else 0.0)
-            drop_targets.append(1.0 if action["dropPressed"] else 0.0)
             shove_targets.append(1.0 if action.get("shovePressed", False) else 0.0)
 
         processed_rounds += 1
@@ -161,8 +154,6 @@ def main() -> None:
 
     x = np.asarray(features, dtype=np.float32)
     move = np.asarray(move_targets, dtype=np.int64)
-    jump = np.asarray(jump_targets, dtype=np.float32)
-    drop = np.asarray(drop_targets, dtype=np.float32)
     shove = np.asarray(shove_targets, dtype=np.float32)
 
     feature_mean = x.mean(axis=0)
@@ -173,8 +164,6 @@ def main() -> None:
         output_path,
         x=x,
         move=move,
-        jump=jump,
-        drop=drop,
         shove=shove,
         feature_mean=feature_mean,
         feature_std=feature_std,

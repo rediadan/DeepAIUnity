@@ -30,10 +30,10 @@ namespace DeepAIArena
 
             BuildSharedBaseArena(root.transform);
 
-            var sharedBase = CreateSharedBase(root.transform, new Vector2(0f, -4.05f), new Color(0.95f, 0.86f, 0.3f));
-            var item = CreateItem(root.transform, new Vector2(0f, 4.55f));
-            var player = CreateActor(root.transform, "Player", new Vector2(-9.75f, 5.15f), ArenaSide.Left, new Color(0.31f, 0.87f, 1f), false);
-            var ghost = CreateActor(root.transform, "Ghost", new Vector2(9.75f, 5.15f), ArenaSide.Right, new Color(1f, 0.4f, 0.45f), true);
+            var sharedBase = CreateSharedBase(root.transform, new Vector2(0f, -4.45f), new Color(0.95f, 0.86f, 0.3f));
+            var item = CreateItem(root.transform, new Vector2(0f, 0f));
+            var player = CreateActor(root.transform, "Player", new Vector2(-8.8f, 0f), ArenaSide.Left, new Color(0.31f, 0.87f, 1f), false);
+            var ghost = CreateActor(root.transform, "Ghost", new Vector2(8.8f, 0f), ArenaSide.Right, new Color(1f, 0.4f, 0.45f), true);
 
             manager.Configure(player, ghost, item, sharedBase);
         }
@@ -49,39 +49,43 @@ namespace DeepAIArena
             }
 
             camera.orthographic = true;
-            camera.orthographicSize = 7f;
             camera.backgroundColor = new Color(0.08f, 0.1f, 0.14f);
-            camera.orthographicSize = 7.2f;
-            camera.transform.position = new Vector3(0f, 0.4f, -10f);
+            camera.orthographicSize = 6.1f;
+            camera.transform.position = new Vector3(0f, 0f, -10f);
         }
 
         private static void BuildSharedBaseArena(Transform parent)
         {
-            CreateFloor(parent, new Vector2(0f, -5.05f), new Vector2(31f, 0.75f), new Color(0.18f, 0.2f, 0.26f), PlatformTraversalMode.Neither);
-            CreateFloor(parent, new Vector2(-10.15f, 4.55f), new Vector2(3.2f, 0.26f), new Color(0.27f, 0.73f, 0.93f), PlatformTraversalMode.Both);
-            CreateFloor(parent, new Vector2(10.15f, 4.55f), new Vector2(3.2f, 0.26f), new Color(0.95f, 0.52f, 0.58f), PlatformTraversalMode.Both);
-            CreateFloor(parent, new Vector2(0f, 4.35f), new Vector2(2.3f, 0.22f), new Color(0.92f, 0.83f, 0.32f), PlatformTraversalMode.Both);
+            var wallColor = new Color(0.2f, 0.23f, 0.3f);
+            var blockColor = new Color(0.34f, 0.39f, 0.5f);
+            var laneColor = new Color(0.16f, 0.2f, 0.27f);
 
-            CreateFloor(parent, new Vector2(-6.6f, 3.25f), new Vector2(2.4f, 0.22f), new Color(0.45f, 0.52f, 0.92f), PlatformTraversalMode.Both);
-            CreateFloor(parent, new Vector2(-2.8f, 2.1f), new Vector2(2.4f, 0.22f), new Color(0.45f, 0.52f, 0.92f), PlatformTraversalMode.Both);
-            CreateFloor(parent, new Vector2(2.8f, 2.1f), new Vector2(2.4f, 0.22f), new Color(0.45f, 0.52f, 0.92f), PlatformTraversalMode.Both);
-            CreateFloor(parent, new Vector2(6.6f, 3.25f), new Vector2(2.4f, 0.22f), new Color(0.45f, 0.52f, 0.92f), PlatformTraversalMode.Both);
+            CreateVisualZone(parent, new Vector2(0f, 3.25f), new Vector2(3.2f, 0.75f), new Color(0.18f, 0.25f, 0.33f), "TopItemZone");
+            CreateVisualZone(parent, new Vector2(0f, 0f), new Vector2(3.0f, 0.9f), new Color(0.25f, 0.2f, 0.18f), "CenterItemZone");
+            CreateVisualZone(parent, new Vector2(0f, -2.3f), new Vector2(3.2f, 0.75f), new Color(0.18f, 0.26f, 0.22f), "BottomItemZone");
 
-            CreateFloor(parent, new Vector2(0f, 1.25f), new Vector2(3.2f, 0.24f), new Color(0.78f, 0.41f, 0.28f), PlatformTraversalMode.Both);
-            CreateFloor(parent, new Vector2(-7.2f, 0.1f), new Vector2(3.1f, 0.22f), new Color(0.22f, 0.68f, 0.55f), PlatformTraversalMode.Both);
-            CreateFloor(parent, new Vector2(7.2f, 0.1f), new Vector2(3.1f, 0.22f), new Color(0.22f, 0.68f, 0.55f), PlatformTraversalMode.Both);
+            CreateObstacle(parent, new Vector2(0f, 5.35f), new Vector2(20.5f, 0.35f), wallColor, "TopWall");
+            CreateObstacle(parent, new Vector2(0f, -5.35f), new Vector2(20.5f, 0.35f), wallColor, "BottomWall");
+            CreateObstacle(parent, new Vector2(-10.15f, 0f), new Vector2(0.35f, 10.7f), wallColor, "LeftWall");
+            CreateObstacle(parent, new Vector2(10.15f, 0f), new Vector2(0.35f, 10.7f), wallColor, "RightWall");
 
-            CreateFloor(parent, new Vector2(-5.1f, -2.15f), new Vector2(4.1f, 0.24f), new Color(0.19f, 0.57f, 0.44f), PlatformTraversalMode.Both);
-            CreateFloor(parent, new Vector2(5.1f, -2.15f), new Vector2(4.1f, 0.24f), new Color(0.19f, 0.57f, 0.44f), PlatformTraversalMode.Both);
-            CreateFloor(parent, new Vector2(0f, -2.85f), new Vector2(2.2f, 0.22f), new Color(0.84f, 0.48f, 0.26f), PlatformTraversalMode.Both);
+            CreateObstacle(parent, new Vector2(-4.8f, 2.25f), new Vector2(3.2f, 0.42f), blockColor, "TopLeftGate");
+            CreateObstacle(parent, new Vector2(4.8f, 2.25f), new Vector2(3.2f, 0.42f), blockColor, "TopRightGate");
+            CreateObstacle(parent, new Vector2(-4.8f, -1.25f), new Vector2(3.2f, 0.42f), blockColor, "BottomLeftGate");
+            CreateObstacle(parent, new Vector2(4.8f, -1.25f), new Vector2(3.2f, 0.42f), blockColor, "BottomRightGate");
 
-            CreateFloor(parent, new Vector2(-1.7f, -4.35f), new Vector2(1.45f, 0.2f), new Color(0.85f, 0.77f, 0.29f), PlatformTraversalMode.Both);
-            CreateFloor(parent, new Vector2(1.7f, -4.35f), new Vector2(1.45f, 0.2f), new Color(0.85f, 0.77f, 0.29f), PlatformTraversalMode.Both);
+            CreateObstacle(parent, new Vector2(-1.6f, 1.15f), new Vector2(0.45f, 1.45f), laneColor, "CenterLeftPillar");
+            CreateObstacle(parent, new Vector2(1.6f, 1.15f), new Vector2(0.45f, 1.45f), laneColor, "CenterRightPillar");
+            CreateObstacle(parent, new Vector2(-1.6f, -1.15f), new Vector2(0.45f, 1.2f), laneColor, "LowerLeftPillar");
+            CreateObstacle(parent, new Vector2(1.6f, -1.15f), new Vector2(0.45f, 1.2f), laneColor, "LowerRightPillar");
+
+            CreateObstacle(parent, new Vector2(-7.15f, 0f), new Vector2(0.5f, 2.6f), blockColor, "LeftStartDivider");
+            CreateObstacle(parent, new Vector2(7.15f, 0f), new Vector2(0.5f, 2.6f), blockColor, "RightStartDivider");
         }
 
-        private static void CreateFloor(Transform parent, Vector2 position, Vector2 scale, Color color, PlatformTraversalMode traversalMode)
+        private static void CreateObstacle(Transform parent, Vector2 position, Vector2 scale, Color color, string name)
         {
-            var block = new GameObject($"Block_{position.x}_{position.y}");
+            var block = new GameObject(name);
             block.transform.SetParent(parent, false);
             block.transform.position = position;
             block.transform.localScale = scale;
@@ -90,10 +94,20 @@ namespace DeepAIArena
             renderer.sprite = RuntimeSpriteLibrary.Square;
             renderer.color = color;
 
-            var collider = block.AddComponent<BoxCollider2D>();
-            var platform = block.AddComponent<ArenaPlatform>();
-            platform.SetTraversalMode(traversalMode);
-            platform.ApplySettings(collider);
+            block.AddComponent<BoxCollider2D>();
+        }
+
+        private static void CreateVisualZone(Transform parent, Vector2 position, Vector2 scale, Color color, string name)
+        {
+            var zone = new GameObject(name);
+            zone.transform.SetParent(parent, false);
+            zone.transform.position = position;
+            zone.transform.localScale = scale;
+
+            var renderer = zone.AddComponent<SpriteRenderer>();
+            renderer.sprite = RuntimeSpriteLibrary.Square;
+            renderer.color = color;
+            renderer.sortingOrder = -2;
         }
 
         private static ArenaBaseZone CreateSharedBase(Transform parent, Vector2 position, Color color)
@@ -150,17 +164,13 @@ namespace DeepAIArena
             var collider = actorObject.AddComponent<CircleCollider2D>();
             collider.radius = 0.5f;
             var rigidbody = actorObject.AddComponent<Rigidbody2D>();
+            rigidbody.gravityScale = 0f;
             rigidbody.freezeRotation = true;
             rigidbody.interpolation = RigidbodyInterpolation2D.Interpolate;
 
             var controller = actorObject.AddComponent<ArenaCharacterController>();
             controller.Side = side;
             controller.IsGhost = isGhost;
-
-            var sensor = new GameObject("GroundCheck");
-            sensor.transform.SetParent(actorObject.transform, false);
-            sensor.transform.localPosition = new Vector3(0f, -0.34f, 0f);
-            controller.GroundCheck = sensor.transform;
 
             if (isGhost)
             {

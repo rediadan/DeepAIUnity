@@ -5,14 +5,17 @@ namespace DeepAIArena
     public enum ArenaGhostPolicyMode
     {
         RuleBased,
-        OnnxInference
+        OnnxInference,
+        DqnInference
     }
 
     public enum ArenaGhostRuntimeMode
     {
         RuleBased,
         OnnxInference,
+        DqnInference,
         OnnxFailed,
+        DqnFailed,
         OnnxFallback
     }
 
@@ -20,10 +23,10 @@ namespace DeepAIArena
     public class ArenaGhostController : MonoBehaviour
     {
         [Header("Ghost Policy")]
-        [Tooltip("Rule-Based keeps the handcrafted Ghost logic. ONNX Input runs the trained model.")]
+        [Tooltip("Rule-Based keeps handcrafted logic. ONNX Inference runs BC. DQN Inference runs q-value policy.")]
         [SerializeField] private ArenaGhostPolicyMode policyMode = ArenaGhostPolicyMode.RuleBased;
         [SerializeField] private ArenaGhostOnnxPolicy onnxPolicy;
-        [SerializeField] private bool allowRuleFallbackOnOnnxFailure;
+        [SerializeField] private bool allowRuleFallbackOnInferenceFailure;
 
         private ArenaCharacterController controller;
         private ArenaGameManager manager;
@@ -52,18 +55,38 @@ namespace DeepAIArena
                 {
                     RuntimeMode = ArenaGhostRuntimeMode.OnnxInference;
                     controller.SetGhostInput(
-                        modelAction.horizontal,
-                        modelAction.jump,
-                        modelAction.drop,
+                        modelAction.move,
                         modelAction.shove,
                         modelAction.routeName);
                     return;
                 }
 
-                if (!allowRuleFallbackOnOnnxFailure)
+                if (!allowRuleFallbackOnInferenceFailure)
                 {
                     RuntimeMode = ArenaGhostRuntimeMode.OnnxFailed;
-                    controller.SetGhostInput(0f, false, false, false, "OnnxFailed");
+                    controller.SetGhostInput(Vector2.zero, false, "OnnxFailed");
+                    return;
+                }
+
+                RuntimeMode = ArenaGhostRuntimeMode.OnnxFallback;
+            }
+            else if (policyMode == ArenaGhostPolicyMode.DqnInference)
+            {
+                if (onnxPolicy != null
+                    && onnxPolicy.TryEvaluateDqn(manager.BuildObservation(ArenaSide.Right), out var modelAction))
+                {
+                    RuntimeMode = ArenaGhostRuntimeMode.DqnInference;
+                    controller.SetGhostInput(
+                        modelAction.move,
+                        modelAction.shove,
+                        modelAction.routeName);
+                    return;
+                }
+
+                if (!allowRuleFallbackOnInferenceFailure)
+                {
+                    RuntimeMode = ArenaGhostRuntimeMode.DqnFailed;
+                    controller.SetGhostInput(Vector2.zero, false, "DqnFailed");
                     return;
                 }
 
@@ -75,12 +98,10 @@ namespace DeepAIArena
             }
 
             var target = GetTargetPoint(out var routeName);
-            var direction = Mathf.Sign(target.x - transform.position.x);
-            var horizontal = Mathf.Abs(target.x - transform.position.x) > 0.25f ? direction : 0f;
-            var jump = ShouldJumpTowards(target);
-            var drop = ShouldDropTowards(target);
+            var delta = target - (Vector2)transform.position;
+            var move = delta.sqrMagnitude > 0.08f ? delta.normalized : Vector2.zero;
             var shove = ShouldShove();
-            controller.SetGhostInput(horizontal, jump, drop, shove, routeName);
+            controller.SetGhostInput(move, shove, routeName);
         }
 
         private Vector2 GetTargetPoint(out string routeName)
@@ -93,44 +114,22 @@ namespace DeepAIArena
 
             var itemPosition = manager.Item.transform.position;
             var playerPosition = manager.Player.transform.position;
-            var preferIntercept = playerPosition.y < 2.5f;
+            var preferIntercept = manager.Player.HasItem;
 
-            if (itemPosition.y > 3.6f)
+            if (itemPosition.y > 1.4f)
             {
                 routeName = "Top";
-                return preferIntercept ? new Vector2(2.4f, 3.4f) : itemPosition;
+                return preferIntercept ? playerPosition : itemPosition;
             }
 
-            if (itemPosition.y < -1.4f)
+            if (itemPosition.y < -1.2f)
             {
                 routeName = "Bottom";
-                return preferIntercept ? new Vector2(1.2f, -3.2f) : itemPosition;
+                return preferIntercept ? playerPosition : itemPosition;
             }
 
             routeName = "Center";
-            return itemPosition;
-        }
-
-        private bool ShouldJumpTowards(Vector2 target)
-        {
-            if (!controller.IsGrounded())
-            {
-                return false;
-            }
-
-            if (target.y > transform.position.y + 0.7f)
-            {
-                return true;
-            }
-
-            var direction = Mathf.Sign(target.x - transform.position.x);
-            var hit = Physics2D.CircleCast(transform.position, 0.2f, Vector2.right * direction, 0.55f);
-            return hit.collider != null && hit.collider.gameObject != gameObject;
-        }
-
-        private bool ShouldDropTowards(Vector2 target)
-        {
-            return controller.IsGrounded() && target.y < transform.position.y - 0.6f;
+            return preferIntercept ? playerPosition : itemPosition;
         }
 
         private bool ShouldShove()
