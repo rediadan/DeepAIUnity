@@ -24,6 +24,20 @@ namespace DeepAIArena
     public class ArenaGhostOnnxPolicy : MonoBehaviour
     {
         private const int BaseFeatureCount = 21;
+        private const float GuardArrivalDistance = 0.35f;
+        private const float GuardAlignmentThreshold = 0.25f;
+        private const float SideDividerBypassX = 7.15f;
+        private const float LaneCenterGateX = 2.2f;
+        private const float CentralPillarOuterX = 1.95f;
+        private const float CentralPillarInnerX = 1.05f;
+        private const float TopLaneY = 3.05f;
+        private const float MiddleApproachLaneY = -2.05f;
+        private const float BottomLaneY = -2.3f;
+        private const float BaseApproachX = 0.85f;
+        private const float GuardWaypointHoldSeconds = 0.28f;
+        private const float GuardWaypointReleaseDistance = 0.28f;
+        private const float LaneAlignReleaseDistance = 0.7f;
+        private const float LaneAlignMaxHoldSeconds = 0.7f;
 
         [SerializeField] private UnityEngine.Object modelAsset;
         [SerializeField] private TextAsset normalizationStats;
@@ -31,6 +45,7 @@ namespace DeepAIArena
         [SerializeField] private float shoveThreshold = 0.5f;
         [SerializeField] private bool verboseLogging;
         [SerializeField] private int sequenceLength = 4;
+        [SerializeField] private bool forceObjectiveSteering;
 
         private ArenaNormalizationStats stats;
         private readonly Queue<float[]> observationHistory = new();
@@ -46,10 +61,17 @@ namespace DeepAIArena
         private bool initializationSucceeded;
         private int expectedFeatureCount = BaseFeatureCount;
         private float lastObservedRoundElapsedTime = -1f;
+        private Vector2 heldGuardWaypoint;
+        private string heldGuardWaypointName;
+        private float heldGuardWaypointUntil = -1f;
+        private float heldGuardWaypointStartedAt = -1f;
+        private ArenaTargetType heldTargetType;
+        private bool hasHeldGuardWaypoint;
 
         private void OnDisable()
         {
             ResetObservationHistory();
+            ResetGuardWaypoint();
             DisposeWorker();
         }
 
@@ -89,7 +111,7 @@ namespace DeepAIArena
                     shove = shoveProb.Length > 0 && shoveProb[0] >= shoveThreshold,
                     routeName = "Model"
                 };
-                action = ApplyTargetDirectionGuard(action, observation);
+                action = ApplyTargetDirectionGuard(action, observation, forceObjectiveSteering);
 
                 return true;
             }
@@ -285,7 +307,7 @@ namespace DeepAIArena
                     : ArenaDqnAction.Idle;
                 var isRightSideActor = IsRightSideActor(observation);
                 action = ToGhostModelAction(dqnAction, isRightSideActor);
-                action = ApplyTargetDirectionGuard(action, observation);
+                action = ApplyTargetDirectionGuard(action, observation, forceObjectiveSteering);
                 return true;
             }
             catch (Exception exception)
@@ -525,6 +547,7 @@ namespace DeepAIArena
             if (roundElapsedTime < lastObservedRoundElapsedTime)
             {
                 ResetObservationHistory();
+                ResetGuardWaypoint();
             }
 
             lastObservedRoundElapsedTime = roundElapsedTime;
@@ -787,31 +810,247 @@ namespace DeepAIArena
             return modelAction;
         }
 
-        private static ArenaGhostModelAction ApplyTargetDirectionGuard(
+        private ArenaGhostModelAction ApplyTargetDirectionGuard(
             ArenaGhostModelAction action,
-            ArenaObservationSnapshot observation)
+            ArenaObservationSnapshot observation,
+            bool forceObjectiveSteering)
         {
-            var targetDelta = observation.targetPosition - observation.selfPosition;
-            if (targetDelta.magnitude < 0.35f)
+            var waypoint = ResolveStableGuardWaypoint(observation, out var waypointName);
+            var targetDelta = waypoint - observation.selfPosition;
+            if (targetDelta.magnitude < GuardArrivalDistance)
             {
                 return action;
             }
 
-            var shouldForceObjectiveMovement = observation.selfHasItem || observation.opponentHasItem;
+            var shouldForceObjectiveMovement = forceObjectiveSteering
+                || observation.selfHasItem
+                || observation.opponentHasItem;
             if (!shouldForceObjectiveMovement && action.move.sqrMagnitude < 0.0001f)
             {
                 return action;
             }
 
             var targetDirection = targetDelta.normalized;
-            if (Vector2.Dot(action.move.normalized, targetDirection) > 0.25f)
+            var isAlignedWithWaypoint = Vector2.Dot(action.move.normalized, targetDirection) > GuardAlignmentThreshold;
+            var shouldOverrideAlignedMove = observation.wallAhead
+                || IsNearCentralPillarChoke(observation.selfPosition, observation.targetPosition);
+            if (isAlignedWithWaypoint && !shouldOverrideAlignedMove && !forceObjectiveSteering)
             {
                 return action;
             }
 
             action.move = targetDirection;
-            action.routeName += shouldForceObjectiveMovement ? ":ObjectiveGuarded" : ":Guarded";
+            var suffix = shouldForceObjectiveMovement ? ":ObjectiveGuarded" : ":Guarded";
+            if (!string.IsNullOrEmpty(waypointName))
+            {
+                suffix += $"[{waypointName}]";
+            }
+
+            action.routeName += suffix;
             return action;
+        }
+
+        private Vector2 ResolveStableGuardWaypoint(ArenaObservationSnapshot observation, out string waypointName)
+        {
+            var resolved = ResolveGuardWaypoint(observation, out var resolvedName);
+            if (string.IsNullOrEmpty(resolvedName))
+            {
+                ResetGuardWaypoint();
+                waypointName = resolvedName;
+                return resolved;
+            }
+
+            var releaseDistance = heldGuardWaypointName == "LaneAlign"
+                ? LaneAlignReleaseDistance
+                : GuardWaypointReleaseDistance;
+            var reachedHeldWaypoint = hasHeldGuardWaypoint
+                && Vector2.Distance(observation.selfPosition, heldGuardWaypoint) <= releaseDistance;
+            var heldTooLong = hasHeldGuardWaypoint
+                && heldGuardWaypointName == "LaneAlign"
+                && Time.time - heldGuardWaypointStartedAt >= LaneAlignMaxHoldSeconds;
+            var targetTypeChanged = hasHeldGuardWaypoint && heldTargetType != observation.targetType;
+            if (hasHeldGuardWaypoint
+                && !reachedHeldWaypoint
+                && !heldTooLong
+                && !targetTypeChanged
+                && Time.time < heldGuardWaypointUntil)
+            {
+                waypointName = heldGuardWaypointName;
+                return heldGuardWaypoint;
+            }
+
+            var isSameWaypoint = hasHeldGuardWaypoint
+                && heldGuardWaypointName == resolvedName
+                && Vector2.Distance(heldGuardWaypoint, resolved) <= 0.05f;
+            heldGuardWaypoint = resolved;
+            heldGuardWaypointName = resolvedName;
+            heldGuardWaypointUntil = Time.time + GuardWaypointHoldSeconds;
+            if (!isSameWaypoint)
+            {
+                heldGuardWaypointStartedAt = Time.time;
+            }
+            heldTargetType = observation.targetType;
+            hasHeldGuardWaypoint = true;
+            waypointName = resolvedName;
+            return resolved;
+        }
+
+        private void ResetGuardWaypoint()
+        {
+            hasHeldGuardWaypoint = false;
+            heldGuardWaypoint = Vector2.zero;
+            heldGuardWaypointName = string.Empty;
+            heldGuardWaypointUntil = -1f;
+            heldGuardWaypointStartedAt = -1f;
+            heldTargetType = default;
+        }
+
+        private static Vector2 ResolveGuardWaypoint(ArenaObservationSnapshot observation, out string waypointName)
+        {
+            waypointName = string.Empty;
+
+            var self = observation.selfPosition;
+            var target = observation.targetPosition;
+            var targetDelta = target - self;
+            if (targetDelta.magnitude < GuardArrivalDistance)
+            {
+                return target;
+            }
+
+            var laneY = SelectGuardLaneY(observation);
+            if (observation.selfHasItem || observation.targetType == ArenaTargetType.Base)
+            {
+                return ResolveBaseReturnWaypoint(self, target, laneY, out waypointName);
+            }
+
+            if (observation.wallAhead)
+            {
+                waypointName = "WallBypass";
+                if (Mathf.Abs(self.y - laneY) > GuardArrivalDistance)
+                {
+                    return new Vector2(self.x, laneY);
+                }
+
+                if (Mathf.Abs(self.x) > LaneCenterGateX)
+                {
+                    return new Vector2(Mathf.Sign(self.x) * LaneCenterGateX, laneY);
+                }
+
+                return new Vector2(0f, laneY);
+            }
+
+            if (IsNearCentralPillarChoke(self, target))
+            {
+                waypointName = "ChokeBypass";
+                return new Vector2(Mathf.Sign(self.x) * LaneCenterGateX, laneY);
+            }
+
+            if (Mathf.Abs(self.x) > SideDividerBypassX && Mathf.Abs(self.y - laneY) > GuardArrivalDistance)
+            {
+                waypointName = "SideBypass";
+                return new Vector2(self.x, laneY);
+            }
+
+            if (ShouldUseLaneWaypoint(observation, laneY))
+            {
+                if (Mathf.Abs(self.x) > LaneCenterGateX)
+                {
+                    waypointName = "LaneEntry";
+                    return new Vector2(Mathf.Sign(self.x) * LaneCenterGateX, laneY);
+                }
+
+                if (!IsCenterTarget(target)
+                    && Mathf.Abs(self.y - laneY) > LaneAlignReleaseDistance
+                    && Mathf.Abs(target.y - laneY) > GuardArrivalDistance)
+                {
+                    waypointName = "LaneAlign";
+                    return new Vector2(0f, laneY);
+                }
+            }
+
+            return target;
+        }
+
+        private static bool IsCenterTarget(Vector2 target)
+        {
+            return Mathf.Abs(target.x) < 1.2f && Mathf.Abs(target.y) < 0.8f;
+        }
+
+        private static Vector2 ResolveBaseReturnWaypoint(
+            Vector2 self,
+            Vector2 baseTarget,
+            float laneY,
+            out string waypointName)
+        {
+            waypointName = "BaseReturn";
+
+            if (Mathf.Abs(self.x) > LaneCenterGateX)
+            {
+                waypointName = "BaseLaneEntry";
+                return new Vector2(Mathf.Sign(self.x) * LaneCenterGateX, laneY);
+            }
+
+            if (Mathf.Abs(self.x) > BaseApproachX)
+            {
+                waypointName = "BaseCenterAlign";
+                return new Vector2(0f, laneY);
+            }
+
+            waypointName = "BaseDropIn";
+            return baseTarget;
+        }
+
+        private static float SelectGuardLaneY(ArenaObservationSnapshot observation)
+        {
+            if (observation.selfHasItem || observation.targetType == ArenaTargetType.Base)
+            {
+                return BottomLaneY;
+            }
+
+            if (observation.targetPosition.y > 1.5f)
+            {
+                return TopLaneY;
+            }
+
+            if (observation.targetPosition.y < -1f)
+            {
+                return BottomLaneY;
+            }
+
+            return observation.selfPosition.y > 1.4f ? TopLaneY : MiddleApproachLaneY;
+        }
+
+        private static bool ShouldUseLaneWaypoint(ArenaObservationSnapshot observation, float laneY)
+        {
+            var self = observation.selfPosition;
+            var target = observation.targetPosition;
+            if (observation.selfHasItem || observation.targetType == ArenaTargetType.Base)
+            {
+                return true;
+            }
+
+            if (Mathf.Abs(target.y) < 0.8f)
+            {
+                return true;
+            }
+
+            return Mathf.Abs(self.x) > LaneCenterGateX && Mathf.Abs(self.y - laneY) < 1.25f;
+        }
+
+        private static bool IsNearCentralPillarChoke(Vector2 self, Vector2 target)
+        {
+            if (Mathf.Abs(target.x) > 1.2f || Mathf.Abs(target.y) > 1.1f)
+            {
+                return false;
+            }
+
+            var absX = Mathf.Abs(self.x);
+            if (absX < CentralPillarInnerX || absX > CentralPillarOuterX)
+            {
+                return false;
+            }
+
+            return self.y > -1.85f && self.y < 1.95f;
         }
 
         private static Vector2 ToMoveVector(ArenaMoveAction moveAction, bool mirrorHorizontal)

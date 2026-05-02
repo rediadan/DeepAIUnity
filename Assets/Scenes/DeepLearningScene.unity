@@ -677,6 +677,7 @@ MonoBehaviour:
   wallCheckDistance: 0.12
   side: 0
   isGhost: 0
+  velocitySmoothing: 30
   shoveRange: 0.75
   shoveCooldown: 0.45
   shoveForce: 4.5
@@ -851,12 +852,13 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 59f8b78d7cf4ff242956c6708e2acc89, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::DeepAIArena.ArenaGhostOnnxPolicy
-  modelAsset: {fileID: 5022602860645237092, guid: 66c6874ddac1b1840b62cac484d5b83f, type: 3}
-  normalizationStats: {fileID: 4900000, guid: b62247b6cee7ace4f8996397435837b7, type: 3}
+  modelAsset: {fileID: 5022602860645237092, guid: 0f874e3422f0d684e911173f6539212b, type: 3}
+  normalizationStats: {fileID: 4900000, guid: bfe8068307cfb824681c0cd0b77f2df5, type: 3}
   preferGpu: 1
   shoveThreshold: 0.5
   verboseLogging: 0
   sequenceLength: 4
+  forceObjectiveSteering: 0
 --- !u!114 &791350294
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -891,6 +893,7 @@ MonoBehaviour:
   wallCheckDistance: 0.12
   side: 1
   isGhost: 1
+  velocitySmoothing: 30
   shoveRange: 0.75
   shoveCooldown: 0.45
   shoveForce: 4.5

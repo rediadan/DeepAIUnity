@@ -580,11 +580,14 @@ namespace DeepAIArena
             }
 
             GUI.color = Color.white;
-            GUILayout.BeginArea(new Rect(10f, 10f, 500f, 180f), GUI.skin.box);
+            GUILayout.BeginArea(new Rect(10f, 10f, 560f, 205f), GUI.skin.box);
             GUILayout.Label("Deep AI Arena Prototype");
             GUILayout.Label($"Score  Player {leftScore} : {rightScore} Ghost");
             GUILayout.Label($"Item lane: {GetLaneName(item.transform.position.y)}");
             GUILayout.Label($"Ghost route: {(ghost != null ? ghost.DebugRouteName : "N/A")}");
+            var ghostObservation = BuildObservation(ArenaSide.Right);
+            GUILayout.Label($"Ghost target: {ghostObservation.targetType} {FormatVector2(ghostObservation.targetPosition)} "
+                + $"dist {Vector2.Distance(ghostObservation.selfPosition, ghostObservation.targetPosition):0.00}");
             var ghostController = ghost != null ? ghost.GetComponent<ArenaGhostController>() : null;
             GUILayout.Label($"Ghost mode: {(ghostController != null ? ghostController.PolicyMode.ToString() : "N/A")}");
             GUILayout.Label($"Ghost runtime: {(ghostController != null ? ghostController.RuntimeMode.ToString() : "N/A")}");
@@ -606,6 +609,11 @@ namespace DeepAIArena
             }
 
             return "Center";
+        }
+
+        private static string FormatVector2(Vector2 value)
+        {
+            return $"({value.x:0.00}, {value.y:0.00})";
         }
 
         private static int GetLaneIndex(float y)

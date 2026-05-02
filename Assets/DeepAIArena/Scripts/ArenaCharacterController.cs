@@ -12,6 +12,7 @@ namespace DeepAIArena
         [SerializeField] private float wallCheckDistance = 0.12f;
         [SerializeField] private ArenaSide side;
         [SerializeField] private bool isGhost;
+        [SerializeField] private float velocitySmoothing = 40f;
         [SerializeField] private float shoveRange = 0.75f;
         [SerializeField] private float shoveCooldown = 0.45f;
         [SerializeField] private float shoveForce = 4.5f;
@@ -115,7 +116,11 @@ namespace DeepAIArena
             }
 
             var desiredInput = IsBlockedByWall(moveInput) ? Vector2.zero : moveInput;
-            body.linearVelocity = desiredInput * moveSpeed;
+            var targetVelocity = desiredInput * moveSpeed;
+            body.linearVelocity = Vector2.MoveTowards(
+                body.linearVelocity,
+                targetVelocity,
+                velocitySmoothing * Time.fixedDeltaTime);
 
             if (shoveRequested)
             {
