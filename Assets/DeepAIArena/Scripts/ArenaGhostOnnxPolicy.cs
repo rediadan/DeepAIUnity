@@ -21,6 +21,13 @@ namespace DeepAIArena
         public float[] feature_std;
     }
 
+    public enum ArenaModelActorSide
+    {
+        Auto,
+        Left,
+        Right
+    }
+
     public class ArenaGhostOnnxPolicy : MonoBehaviour
     {
         private const int BaseFeatureCount = 21;
@@ -45,6 +52,7 @@ namespace DeepAIArena
         [SerializeField] private float shoveThreshold = 0.5f;
         [SerializeField] private bool verboseLogging;
         [SerializeField] private int sequenceLength = 4;
+        [SerializeField] private ArenaModelActorSide modelActorSide = ArenaModelActorSide.Auto;
         [SerializeField] private bool forceObjectiveSteering;
 
         private ArenaNormalizationStats stats;
@@ -102,7 +110,7 @@ namespace DeepAIArena
                 var shoveProb = ReadTensor(shoveTensor);
 
                 var moveIndex = ArgMax(moveLogits);
-                var isRightSideActor = IsRightSideActor(observation);
+                var isRightSideActor = ShouldMirrorHorizontal(observation);
                 var move = ToMoveVector((ArenaMoveAction)moveIndex, isRightSideActor);
 
                 action = new ArenaGhostModelAction
@@ -305,7 +313,7 @@ namespace DeepAIArena
                 var dqnAction = Enum.IsDefined(typeof(ArenaDqnAction), actionIndex)
                     ? (ArenaDqnAction)actionIndex
                     : ArenaDqnAction.Idle;
-                var isRightSideActor = IsRightSideActor(observation);
+                var isRightSideActor = ShouldMirrorHorizontal(observation);
                 action = ToGhostModelAction(dqnAction, isRightSideActor);
                 action = ApplyTargetDirectionGuard(action, observation, forceObjectiveSteering);
                 return true;
@@ -462,7 +470,7 @@ namespace DeepAIArena
 
         private float[] BuildNormalizedObservation(ArenaObservationSnapshot observation)
         {
-            var isRightSideActor = IsRightSideActor(observation);
+            var isRightSideActor = ShouldMirrorHorizontal(observation);
             var mirroredSelfPositionX = MirrorX(observation.selfPosition.x, isRightSideActor);
             var mirroredOpponentPositionX = MirrorX(observation.opponentPosition.x, isRightSideActor);
             var mirroredItemPositionX = MirrorX(observation.itemPosition.x, isRightSideActor);
@@ -697,9 +705,14 @@ namespace DeepAIArena
             return shouldMirror ? -value : value;
         }
 
-        private static bool IsRightSideActor(ArenaObservationSnapshot observation)
+        private bool ShouldMirrorHorizontal(ArenaObservationSnapshot observation)
         {
-            return observation.selfPosition.x > 0f;
+            return modelActorSide switch
+            {
+                ArenaModelActorSide.Left => false,
+                ArenaModelActorSide.Right => true,
+                _ => observation.selfPosition.x > 0f
+            };
         }
 
         private float[] ReadTensor(object tensorInstance)

@@ -30,9 +30,25 @@ namespace DeepAIArena
 
         private ArenaCharacterController controller;
         private ArenaGameManager manager;
+        private bool controlActive = true;
 
         public ArenaGhostPolicyMode PolicyMode => policyMode;
         public ArenaGhostRuntimeMode RuntimeMode { get; private set; } = ArenaGhostRuntimeMode.RuleBased;
+        public bool ControlActive => controlActive;
+
+        public void SetPolicyMode(ArenaGhostPolicyMode mode)
+        {
+            policyMode = mode;
+        }
+
+        public void SetControlActive(bool active)
+        {
+            controlActive = active;
+            if (!active)
+            {
+                RuntimeMode = ArenaGhostRuntimeMode.RuleBased;
+            }
+        }
 
         private void Awake()
         {
@@ -42,6 +58,11 @@ namespace DeepAIArena
 
         private void Update()
         {
+            if (!controlActive)
+            {
+                return;
+            }
+
             manager ??= FindAnyObjectByType<ArenaGameManager>();
             if (manager == null)
             {
@@ -51,7 +72,7 @@ namespace DeepAIArena
             if (policyMode == ArenaGhostPolicyMode.OnnxInference)
             {
                 if (onnxPolicy != null
-                    && onnxPolicy.TryEvaluate(manager.BuildObservation(ArenaSide.Right), out var modelAction))
+                    && onnxPolicy.TryEvaluate(manager.BuildObservation(controller.Side), out var modelAction))
                 {
                     RuntimeMode = ArenaGhostRuntimeMode.OnnxInference;
                     controller.SetGhostInput(
@@ -73,7 +94,7 @@ namespace DeepAIArena
             else if (policyMode == ArenaGhostPolicyMode.DqnInference)
             {
                 if (onnxPolicy != null
-                    && onnxPolicy.TryEvaluateDqn(manager.BuildObservation(ArenaSide.Right), out var modelAction))
+                    && onnxPolicy.TryEvaluateDqn(manager.BuildObservation(controller.Side), out var modelAction))
                 {
                     RuntimeMode = ArenaGhostRuntimeMode.DqnInference;
                     controller.SetGhostInput(
@@ -113,35 +134,36 @@ namespace DeepAIArena
             }
 
             var itemPosition = manager.Item.transform.position;
-            var playerPosition = manager.Player.transform.position;
-            var preferIntercept = manager.Player.HasItem;
+            var opponent = controller.Side == ArenaSide.Left ? manager.Ghost : manager.Player;
+            var opponentPosition = opponent.transform.position;
+            var preferIntercept = opponent.HasItem;
 
             if (itemPosition.y > 1.4f)
             {
                 routeName = "Top";
-                return preferIntercept ? playerPosition : itemPosition;
+                return preferIntercept ? opponentPosition : itemPosition;
             }
 
             if (itemPosition.y < -1.2f)
             {
                 routeName = "Bottom";
-                return preferIntercept ? playerPosition : itemPosition;
+                return preferIntercept ? opponentPosition : itemPosition;
             }
 
             routeName = "Center";
-            return preferIntercept ? playerPosition : itemPosition;
+            return preferIntercept ? opponentPosition : itemPosition;
         }
 
         private bool ShouldShove()
         {
-            var player = manager.Player;
-            if (player == null)
+            var opponent = controller.Side == ArenaSide.Left ? manager.Ghost : manager.Player;
+            if (opponent == null)
             {
                 return false;
             }
 
-            return Vector2.Distance(transform.position, player.transform.position) < 1.1f
-                && player.HasItem;
+            return Vector2.Distance(transform.position, opponent.transform.position) < 1.1f
+                && opponent.HasItem;
         }
     }
 }

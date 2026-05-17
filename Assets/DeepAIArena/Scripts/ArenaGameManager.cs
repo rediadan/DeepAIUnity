@@ -46,6 +46,14 @@ namespace DeepAIArena
         Shove = 5
     }
 
+    public enum ArenaActorControlMode
+    {
+        Human,
+        RuleBased,
+        OnnxInference,
+        DqnInference
+    }
+
     [System.Serializable]
     public struct ArenaObservationSnapshot
     {
@@ -110,6 +118,10 @@ namespace DeepAIArena
         [SerializeField] private ArenaCharacterController ghost;
         [SerializeField] private ArenaItem item;
         [SerializeField] private ArenaBaseZone sharedBase;
+        [Header("Actor Control")]
+        [SerializeField] private ArenaActorControlMode leftActorMode = ArenaActorControlMode.Human;
+        [SerializeField] private ArenaActorControlMode rightActorMode = ArenaActorControlMode.DqnInference;
+        [Header("Logging")]
         [SerializeField] private bool writeLogsToFile = true;
         [SerializeField] private string outputDirectoryName = "arena_training_rounds";
         [SerializeField] private bool writeDqnTransitions = true;
@@ -176,6 +188,7 @@ namespace DeepAIArena
             ghost.Initialize(this);
             arenaSharedBase.Initialize(this);
             item.Initialize(this);
+            ApplyActorControlModes();
 
             BeginRound();
         }
@@ -234,6 +247,64 @@ namespace DeepAIArena
             ghost.Initialize(this);
             sharedBase.Initialize(this);
             item.Initialize(this);
+            ApplyActorControlModes();
+        }
+
+        private void ApplyActorControlModes()
+        {
+            ConfigureActorControl(player, leftActorMode);
+            ConfigureActorControl(ghost, rightActorMode);
+        }
+
+        private void ConfigureActorControl(ArenaCharacterController actor, ArenaActorControlMode mode)
+        {
+            if (actor == null)
+            {
+                return;
+            }
+
+            var useAi = mode != ArenaActorControlMode.Human || actor.IsGhost;
+            actor.IsGhost = useAi;
+
+            var ghostController = actor.GetComponent<ArenaGhostController>();
+            var onnxPolicy = actor.GetComponent<ArenaGhostOnnxPolicy>();
+            if (!useAi)
+            {
+                if (ghostController != null)
+                {
+                    ghostController.enabled = true;
+                    ghostController.SetControlActive(false);
+                }
+
+                if (onnxPolicy != null)
+                {
+                    onnxPolicy.enabled = true;
+                }
+
+                actor.DebugRouteName = "Human";
+                return;
+            }
+
+            ghostController ??= actor.gameObject.AddComponent<ArenaGhostController>();
+            if (mode != ArenaActorControlMode.RuleBased)
+            {
+                onnxPolicy ??= actor.gameObject.AddComponent<ArenaGhostOnnxPolicy>();
+                onnxPolicy.enabled = true;
+            }
+
+            ghostController.enabled = true;
+            ghostController.SetControlActive(true);
+            ghostController.SetPolicyMode(ToGhostPolicyMode(mode));
+        }
+
+        private static ArenaGhostPolicyMode ToGhostPolicyMode(ArenaActorControlMode mode)
+        {
+            return mode switch
+            {
+                ArenaActorControlMode.OnnxInference => ArenaGhostPolicyMode.OnnxInference,
+                ArenaActorControlMode.DqnInference => ArenaGhostPolicyMode.DqnInference,
+                _ => ArenaGhostPolicyMode.RuleBased
+            };
         }
 
         public Vector3 GetSpawnPoint(ArenaSide side)
@@ -580,17 +651,22 @@ namespace DeepAIArena
             }
 
             GUI.color = Color.white;
-            GUILayout.BeginArea(new Rect(10f, 10f, 560f, 205f), GUI.skin.box);
+            GUILayout.BeginArea(new Rect(10f, 10f, 620f, 255f), GUI.skin.box);
             GUILayout.Label("Deep AI Arena Prototype");
-            GUILayout.Label($"Score  Player {leftScore} : {rightScore} Ghost");
+            GUILayout.Label($"Score  Left {leftScore} : {rightScore} Right");
+            GUILayout.Label($"Control  Left: {leftActorMode} / Right: {rightActorMode}");
             GUILayout.Label($"Item lane: {GetLaneName(item.transform.position.y)}");
-            GUILayout.Label($"Ghost route: {(ghost != null ? ghost.DebugRouteName : "N/A")}");
-            var ghostObservation = BuildObservation(ArenaSide.Right);
-            GUILayout.Label($"Ghost target: {ghostObservation.targetType} {FormatVector2(ghostObservation.targetPosition)} "
-                + $"dist {Vector2.Distance(ghostObservation.selfPosition, ghostObservation.targetPosition):0.00}");
+            GUILayout.Label($"Route  Left: {(player != null ? player.DebugRouteName : "N/A")} / Right: {(ghost != null ? ghost.DebugRouteName : "N/A")}");
+            var leftObservation = BuildObservation(ArenaSide.Left);
+            var rightObservation = BuildObservation(ArenaSide.Right);
+            GUILayout.Label($"Left target: {leftObservation.targetType} {FormatVector2(leftObservation.targetPosition)} "
+                + $"dist {Vector2.Distance(leftObservation.selfPosition, leftObservation.targetPosition):0.00}");
+            GUILayout.Label($"Right target: {rightObservation.targetType} {FormatVector2(rightObservation.targetPosition)} "
+                + $"dist {Vector2.Distance(rightObservation.selfPosition, rightObservation.targetPosition):0.00}");
             var ghostController = ghost != null ? ghost.GetComponent<ArenaGhostController>() : null;
-            GUILayout.Label($"Ghost mode: {(ghostController != null ? ghostController.PolicyMode.ToString() : "N/A")}");
-            GUILayout.Label($"Ghost runtime: {(ghostController != null ? ghostController.RuntimeMode.ToString() : "N/A")}");
+            var playerGhostController = player != null ? player.GetComponent<ArenaGhostController>() : null;
+            GUILayout.Label($"Runtime  Left: {FormatActorRuntime(playerGhostController, leftActorMode)} "
+                + $"/ Right: {FormatActorRuntime(ghostController, rightActorMode)}");
             GUILayout.Label("Controls: WASD or arrows to move, Ctrl/E to shove.");
             GUILayout.Label("Goal: grab one of three items and reach the shared base.");
             GUILayout.EndArea();
@@ -614,6 +690,16 @@ namespace DeepAIArena
         private static string FormatVector2(Vector2 value)
         {
             return $"({value.x:0.00}, {value.y:0.00})";
+        }
+
+        private static string FormatActorRuntime(ArenaGhostController controller, ArenaActorControlMode mode)
+        {
+            if (controller == null || !controller.ControlActive)
+            {
+                return mode.ToString();
+            }
+
+            return controller.RuntimeMode.ToString();
         }
 
         private static int GetLaneIndex(float y)

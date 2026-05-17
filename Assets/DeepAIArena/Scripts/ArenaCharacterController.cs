@@ -16,6 +16,7 @@ namespace DeepAIArena
         [SerializeField] private float shoveRange = 0.75f;
         [SerializeField] private float shoveCooldown = 0.45f;
         [SerializeField] private float shoveForce = 4.5f;
+        [SerializeField] private float knockbackControlLockDuration = 0.28f;
 
         private Rigidbody2D body;
         private CircleCollider2D circleCollider;
@@ -27,6 +28,7 @@ namespace DeepAIArena
         private InputAction moveAction;
         private InputAction shoveAction;
         private float lastShoveTime = -999f;
+        private float controlDisabledUntil = -999f;
 
         public ArenaSide Side
         {
@@ -115,12 +117,15 @@ namespace DeepAIArena
                 return;
             }
 
-            var desiredInput = IsBlockedByWall(moveInput) ? Vector2.zero : moveInput;
-            var targetVelocity = desiredInput * moveSpeed;
-            body.linearVelocity = Vector2.MoveTowards(
-                body.linearVelocity,
-                targetVelocity,
-                velocitySmoothing * Time.fixedDeltaTime);
+            if (Time.time >= controlDisabledUntil)
+            {
+                var desiredInput = IsBlockedByWall(moveInput) ? Vector2.zero : moveInput;
+                var targetVelocity = desiredInput * moveSpeed;
+                body.linearVelocity = Vector2.MoveTowards(
+                    body.linearVelocity,
+                    targetVelocity,
+                    velocitySmoothing * Time.fixedDeltaTime);
+            }
 
             if (shoveRequested)
             {
@@ -217,10 +222,7 @@ namespace DeepAIArena
             }
 
             var forceDirection = ((Vector2)(other.transform.position - transform.position)).normalized;
-            if (other.Body != null)
-            {
-                other.Body.AddForce(forceDirection * shoveForce, ForceMode2D.Impulse);
-            }
+            other.ApplyKnockback(forceDirection, shoveForce, knockbackControlLockDuration);
 
             if (other.HasItem)
             {
@@ -230,6 +232,25 @@ namespace DeepAIArena
             }
 
             lastShoveTime = Time.time;
+        }
+
+        public void ApplyKnockback(Vector2 direction, float force, float controlLockDuration)
+        {
+            if (direction.sqrMagnitude < 0.0001f)
+            {
+                direction = facingDirection.sqrMagnitude > 0.0001f ? facingDirection : Vector2.right;
+            }
+
+            body ??= GetComponent<Rigidbody2D>();
+            if (body == null)
+            {
+                return;
+            }
+
+            controlDisabledUntil = Time.time + Mathf.Max(0f, controlLockDuration);
+            body.linearVelocity = direction.normalized * force;
+            moveInput = Vector2.zero;
+            shoveRequested = false;
         }
 
         private void OnDrawGizmosSelected()
@@ -301,6 +322,7 @@ namespace DeepAIArena
             body.linearVelocity = Vector2.zero;
             moveInput = Vector2.zero;
             shoveRequested = false;
+            controlDisabledUntil = -999f;
             carriedItem = null;
         }
 

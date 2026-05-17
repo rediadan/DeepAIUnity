@@ -172,11 +172,10 @@ namespace DeepAIArena
             controller.Side = side;
             controller.IsGhost = isGhost;
 
-            if (isGhost)
-            {
-                actorObject.AddComponent<ArenaGhostController>();
-                actorObject.AddComponent<ArenaGhostOnnxPolicy>();
-            }
+            var ghostController = actorObject.AddComponent<ArenaGhostController>();
+            var onnxPolicy = actorObject.AddComponent<ArenaGhostOnnxPolicy>();
+            ghostController.enabled = isGhost;
+            onnxPolicy.enabled = isGhost;
 
             return controller;
         }
