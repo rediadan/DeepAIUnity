@@ -26,7 +26,8 @@ namespace DeepAIArena
         ItemCollected,
         ItemDelivered,
         ItemLost,
-        FellOffMap
+        FellOffMap,
+        RoundTimeout
     }
 
     public enum ArenaTargetType
@@ -51,7 +52,8 @@ namespace DeepAIArena
         Human,
         RuleBased,
         OnnxInference,
-        DqnInference
+        DqnInference,
+        MlAgents
     }
 
     [System.Serializable]
@@ -66,6 +68,10 @@ namespace DeepAIArena
         public Vector2 itemDelta;
         public Vector2 baseDelta;
         public Vector2 opponentDelta;
+        public float distanceToItem;
+        public float distanceToBase;
+        public float distanceToOpponent;
+        public float distanceToTarget;
         public Vector2 targetPosition;
         public ArenaTargetType targetType;
         public bool wallAhead;
@@ -105,6 +111,59 @@ namespace DeepAIArena
         public bool done;
     }
 
+    [System.Serializable]
+    public struct ArenaCausalStepResult
+    {
+        public bool pickedItem;
+        public bool scored;
+        public bool droppedItem;
+        public bool shoveAttempted;
+        public bool shoveSucceeded;
+        public bool forcedItemDrop;
+        public float reward;
+        public bool done;
+    }
+
+    [System.Serializable]
+    public struct ArenaCausalStepLog
+    {
+        public string logType;
+        public string actorSide;
+        public int roundIndex;
+        public float timestamp;
+        public ArenaObservationSnapshot observation;
+        public ArenaActionSnapshot action;
+        public ArenaCausalStepResult result;
+        public string causalTags;
+    }
+
+    [System.Serializable]
+    public struct ArenaRoundSummaryLog
+    {
+        public string logType;
+        public int roundIndex;
+        public float duration;
+        public string outcome;
+        public int leftScore;
+        public int rightScore;
+        public ArenaRoundActorStats left;
+        public ArenaRoundActorStats right;
+    }
+
+    [System.Serializable]
+    public struct ArenaRoundActorStats
+    {
+        public string actorSide;
+        public int scoreAtEnd;
+        public int itemCollectedCount;
+        public int itemDeliveredCount;
+        public int shoveAttemptCount;
+        public int shoveSuccessCount;
+        public int forcedItemDropCount;
+        public float wallBlockedTime;
+        public float idleTime;
+    }
+
     public class ArenaGameManager : MonoBehaviour
     {
         private readonly Vector3[] itemSpawnPoints =
@@ -118,12 +177,16 @@ namespace DeepAIArena
         [SerializeField] private ArenaCharacterController ghost;
         [SerializeField] private ArenaItem item;
         [SerializeField] private ArenaBaseZone sharedBase;
+        [Header("Round Rules")]
+        [SerializeField] private float roundDurationSeconds = 60f;
+        [SerializeField] private float roundResetDelaySeconds = 1.25f;
         [Header("Actor Control")]
         [SerializeField] private ArenaActorControlMode leftActorMode = ArenaActorControlMode.Human;
         [SerializeField] private ArenaActorControlMode rightActorMode = ArenaActorControlMode.DqnInference;
         [Header("Logging")]
         [SerializeField] private bool writeLogsToFile = true;
         [SerializeField] private string outputDirectoryName = "arena_training_rounds";
+        [SerializeField] private string evaluationSummaryFileName = "arena_round_summary.jsonl";
         [SerializeField] private bool writeDqnTransitions = true;
         [SerializeField] private float dqnStepPenalty = -0.01f;
         [SerializeField] private float dqnTargetProgressRewardScale = 0.05f;
@@ -136,8 +199,15 @@ namespace DeepAIArena
         private float roundStartTime;
         private string outputDirectoryPath;
         private string currentRoundOutputPath;
+        private string evaluationSummaryOutputPath;
         private float pendingLeftDqnReward;
         private float pendingRightDqnReward;
+        private float pendingLeftMlAgentReward;
+        private float pendingRightMlAgentReward;
+        private ArenaCausalStepResult pendingLeftCausalResult;
+        private ArenaCausalStepResult pendingRightCausalResult;
+        private ArenaRoundActorStats leftRoundStats;
+        private ArenaRoundActorStats rightRoundStats;
         private bool hasPreviousPlayerDqnStep;
         private ArenaObservationSnapshot previousPlayerObservation;
         private ArenaActionSnapshot previousPlayerAction;
@@ -147,6 +217,9 @@ namespace DeepAIArena
         public ArenaItem Item => item;
         public Vector3[] ItemSpawnPoints => itemSpawnPoints;
         public ArenaSide LastScoringSide { get; private set; }
+        public int RoundIndex => roundIndex;
+        public float RoundElapsedTime => Time.time - roundStartTime;
+        public bool IsRoundTransitioning => roundTransition;
 
         private void Awake()
         {
@@ -160,6 +233,11 @@ namespace DeepAIArena
             if (writeLogsToFile)
             {
                 Directory.CreateDirectory(outputDirectoryPath);
+                evaluationSummaryOutputPath = Path.Combine(outputDirectoryPath, evaluationSummaryFileName);
+                if (File.Exists(evaluationSummaryOutputPath))
+                {
+                    File.Delete(evaluationSummaryOutputPath);
+                }
             }
 
             if (HasRequiredReferences())
@@ -268,6 +346,7 @@ namespace DeepAIArena
 
             var ghostController = actor.GetComponent<ArenaGhostController>();
             var onnxPolicy = actor.GetComponent<ArenaGhostOnnxPolicy>();
+            var mlAgent = actor.GetComponent<ArenaMlAgent>();
             if (!useAi)
             {
                 if (ghostController != null)
@@ -281,11 +360,31 @@ namespace DeepAIArena
                     onnxPolicy.enabled = true;
                 }
 
+                if (mlAgent != null)
+                {
+                    mlAgent.SetControlActive(false);
+                }
+
                 actor.DebugRouteName = "Human";
                 return;
             }
 
             ghostController ??= actor.gameObject.AddComponent<ArenaGhostController>();
+            if (mode == ArenaActorControlMode.MlAgents)
+            {
+                mlAgent ??= actor.gameObject.AddComponent<ArenaMlAgent>();
+                mlAgent.SetControlActive(true);
+                ghostController.enabled = true;
+                ghostController.SetControlActive(false);
+                actor.DebugRouteName = "MLAgents";
+                return;
+            }
+
+            if (mlAgent != null)
+            {
+                mlAgent.SetControlActive(false);
+            }
+
             if (mode != ArenaActorControlMode.RuleBased)
             {
                 onnxPolicy ??= actor.gameObject.AddComponent<ArenaGhostOnnxPolicy>();
@@ -324,7 +423,6 @@ namespace DeepAIArena
                 return;
             }
 
-            roundTransition = true;
             LastScoringSide = controller.Side;
 
             if (controller.Side == ArenaSide.Left)
@@ -338,7 +436,7 @@ namespace DeepAIArena
 
             controller.DropItem();
             ReportReward(ArenaRewardEventType.ItemDelivered, controller.Side, 5f, "item_delivered");
-            StartCoroutine(ResetRoundAfterDelay());
+            EndRound($"{controller.Side}_scored");
         }
 
         public void BeginRound()
@@ -348,7 +446,12 @@ namespace DeepAIArena
             roundStartTime = Time.time;
             pendingLeftDqnReward = 0f;
             pendingRightDqnReward = 0f;
+            pendingLeftMlAgentReward = 0f;
+            pendingRightMlAgentReward = 0f;
+            pendingLeftCausalResult = default;
+            pendingRightCausalResult = default;
             hasPreviousPlayerDqnStep = false;
+            ResetRoundStats();
             PrepareRoundLogFile();
 
             player.ResetActor(GetSpawnPoint(ArenaSide.Left));
@@ -365,10 +468,24 @@ namespace DeepAIArena
                 return;
             }
 
-            var observation = BuildObservation(ArenaSide.Left);
-            var action = player.GetCurrentActionSnapshot();
-            LogStep(ArenaSide.Left, roundIndex, observation, action);
-            LogDqnTransitionIfReady(observation, action);
+            if (!roundTransition
+                && roundDurationSeconds > 0f
+                && Time.time - roundStartTime >= roundDurationSeconds)
+            {
+                ReportReward(ArenaRewardEventType.RoundTimeout, ArenaSide.Left, 0f, "round_timeout");
+                ReportReward(ArenaRewardEventType.RoundTimeout, ArenaSide.Right, 0f, "round_timeout");
+                EndRound(ResolveTimeoutOutcome());
+            }
+
+            var leftObservation = BuildObservation(ArenaSide.Left);
+            var leftAction = player.GetCurrentActionSnapshot();
+            AccumulateFrameStats(ArenaSide.Left, leftObservation, leftAction);
+            LogStep(ArenaSide.Left, roundIndex, leftObservation, leftAction);
+            LogDqnTransitionIfReady(leftObservation, leftAction);
+
+            var rightObservation = BuildObservation(ArenaSide.Right);
+            var rightAction = ghost.GetCurrentActionSnapshot();
+            AccumulateFrameStats(ArenaSide.Right, rightObservation, rightAction);
         }
 
         public ArenaObservationSnapshot BuildObservation(ArenaSide side)
@@ -378,18 +495,28 @@ namespace DeepAIArena
             var basePosition = sharedBase != null ? (Vector2)sharedBase.transform.position : Vector2.zero;
             var targetType = ResolveTargetType(self, opponent);
             var targetPosition = ResolveTargetPosition(targetType, opponent, basePosition);
+            var selfPosition = (Vector2)self.transform.position;
+            var itemPosition = (Vector2)item.transform.position;
+            var opponentPosition = (Vector2)opponent.transform.position;
+            var itemDelta = itemPosition - selfPosition;
+            var baseDelta = basePosition - selfPosition;
+            var opponentDelta = opponentPosition - selfPosition;
 
             return new ArenaObservationSnapshot
             {
-                selfPosition = self.transform.position,
-                opponentPosition = opponent.transform.position,
-                itemPosition = item.transform.position,
+                selfPosition = selfPosition,
+                opponentPosition = opponentPosition,
+                itemPosition = itemPosition,
                 basePosition = basePosition,
                 selfHasItem = self.HasItem,
                 opponentHasItem = opponent.HasItem,
-                itemDelta = (Vector2)item.transform.position - (Vector2)self.transform.position,
-                baseDelta = basePosition - (Vector2)self.transform.position,
-                opponentDelta = (Vector2)opponent.transform.position - (Vector2)self.transform.position,
+                itemDelta = itemDelta,
+                baseDelta = baseDelta,
+                opponentDelta = opponentDelta,
+                distanceToItem = itemDelta.magnitude,
+                distanceToBase = baseDelta.magnitude,
+                distanceToOpponent = opponentDelta.magnitude,
+                distanceToTarget = Vector2.Distance(selfPosition, targetPosition),
                 targetPosition = targetPosition,
                 targetType = targetType,
                 wallAhead = self.IsWallAhead(),
@@ -424,6 +551,11 @@ namespace DeepAIArena
 
         public void ReportReward(ArenaRewardEventType eventType, ArenaSide actorSide, float rewardDelta, string note)
         {
+            ApplyRewardToRoundState(eventType, actorSide, rewardDelta, note);
+
+            AddPendingDqnReward(actorSide, rewardDelta);
+            AddPendingMlAgentReward(actorSide, rewardDelta);
+
             if (!writeLogsToFile)
             {
                 return;
@@ -441,10 +573,45 @@ namespace DeepAIArena
                 note = note
             };
 
-            AddPendingDqnReward(actorSide, rewardDelta);
-
             var json = JsonUtility.ToJson(rewardEvent);
             File.AppendAllText(currentRoundOutputPath, json + "\n", Encoding.UTF8);
+        }
+
+        public float ConsumeMlAgentReward(ArenaSide side)
+        {
+            if (side == ArenaSide.Left)
+            {
+                var reward = pendingLeftMlAgentReward;
+                pendingLeftMlAgentReward = 0f;
+                return reward;
+            }
+
+            var rightReward = pendingRightMlAgentReward;
+            pendingRightMlAgentReward = 0f;
+            return rightReward;
+        }
+
+        public void ReportShoveAttempt(ArenaSide actorSide, bool succeeded, bool forcedItemDrop)
+        {
+            ref var stats = ref GetMutableStats(actorSide);
+            stats.shoveAttemptCount++;
+
+            ref var result = ref GetMutableCausalResult(actorSide);
+            result.shoveAttempted = true;
+
+            if (!succeeded)
+            {
+                return;
+            }
+
+            stats.shoveSuccessCount++;
+            result.shoveSucceeded = true;
+
+            if (forcedItemDrop)
+            {
+                stats.forcedItemDropCount++;
+                result.forcedItemDrop = true;
+            }
         }
 
         private void LogStep(
@@ -462,6 +629,7 @@ namespace DeepAIArena
 
             var json = JsonUtility.ToJson(new ArenaStepLog
             {
+                logType = "Step",
                 actorSide = actorSide.ToString(),
                 roundIndex = currentRoundIndex,
                 observation = observation,
@@ -470,6 +638,21 @@ namespace DeepAIArena
             });
 
             File.AppendAllText(currentRoundOutputPath, json + "\n", Encoding.UTF8);
+
+            var causalResult = ConsumePendingCausalResult(actorSide);
+            var causalJson = JsonUtility.ToJson(new ArenaCausalStepLog
+            {
+                logType = "CausalStep",
+                actorSide = actorSide.ToString(),
+                roundIndex = currentRoundIndex,
+                timestamp = Time.time - roundStartTime,
+                observation = observation,
+                action = action,
+                result = causalResult,
+                causalTags = BuildCausalTags(observation, action)
+            });
+
+            File.AppendAllText(currentRoundOutputPath, causalJson + "\n", Encoding.UTF8);
         }
 
         private void LogDqnTransitionIfReady(ArenaObservationSnapshot currentObservation, ArenaActionSnapshot currentAction)
@@ -530,6 +713,17 @@ namespace DeepAIArena
             }
         }
 
+        private void AddPendingMlAgentReward(ArenaSide side, float rewardDelta)
+        {
+            if (side == ArenaSide.Left)
+            {
+                pendingLeftMlAgentReward += rewardDelta;
+                return;
+            }
+
+            pendingRightMlAgentReward += rewardDelta;
+        }
+
         private float ConsumePendingDqnReward(ArenaSide side)
         {
             if (side == ArenaSide.Left)
@@ -561,6 +755,236 @@ namespace DeepAIArena
                 : 0f;
 
             return dqnStepPenalty + progressReward + wallPenalty;
+        }
+
+        private void ApplyRewardToRoundState(ArenaRewardEventType eventType, ArenaSide actorSide, float rewardDelta, string note)
+        {
+            ref var stats = ref GetMutableStats(actorSide);
+            ref var result = ref GetMutableCausalResult(actorSide);
+            result.reward += rewardDelta;
+
+            switch (eventType)
+            {
+                case ArenaRewardEventType.ItemCollected:
+                    stats.itemCollectedCount++;
+                    result.pickedItem = true;
+                    break;
+                case ArenaRewardEventType.ItemDelivered:
+                    stats.itemDeliveredCount++;
+                    result.scored = true;
+                    result.done = true;
+                    break;
+                case ArenaRewardEventType.ItemLost:
+                    if (rewardDelta < 0f)
+                    {
+                        result.droppedItem = true;
+                    }
+                    else if (note == "forced_drop")
+                    {
+                        result.forcedItemDrop = true;
+                    }
+
+                    break;
+                case ArenaRewardEventType.RoundTimeout:
+                    result.done = true;
+                    break;
+            }
+        }
+
+        private void AccumulateFrameStats(
+            ArenaSide actorSide,
+            ArenaObservationSnapshot observation,
+            ArenaActionSnapshot action)
+        {
+            ref var stats = ref GetMutableStats(actorSide);
+            if (action.moveAction == ArenaMoveAction.Idle)
+            {
+                stats.idleTime += Time.deltaTime;
+            }
+
+            if (observation.wallAhead && action.moveAction != ArenaMoveAction.Idle)
+            {
+                stats.wallBlockedTime += Time.deltaTime;
+            }
+        }
+
+        private void ResetRoundStats()
+        {
+            leftRoundStats = new ArenaRoundActorStats
+            {
+                actorSide = ArenaSide.Left.ToString()
+            };
+            rightRoundStats = new ArenaRoundActorStats
+            {
+                actorSide = ArenaSide.Right.ToString()
+            };
+        }
+
+        private void EndRound(string outcome)
+        {
+            if (roundTransition)
+            {
+                return;
+            }
+
+            roundTransition = true;
+            pendingLeftCausalResult.done = true;
+            pendingRightCausalResult.done = true;
+            WriteRoundSummary(outcome);
+            StartCoroutine(ResetRoundAfterDelay());
+        }
+
+        private string ResolveTimeoutOutcome()
+        {
+            if (leftScore > rightScore)
+            {
+                return "timeout_left_leading";
+            }
+
+            if (rightScore > leftScore)
+            {
+                return "timeout_right_leading";
+            }
+
+            return "timeout_draw";
+        }
+
+        private void WriteRoundSummary(string outcome)
+        {
+            if (!writeLogsToFile)
+            {
+                return;
+            }
+
+            EnsureEvaluationSummaryPathReady();
+            leftRoundStats.scoreAtEnd = leftScore;
+            rightRoundStats.scoreAtEnd = rightScore;
+
+            var summary = new ArenaRoundSummaryLog
+            {
+                logType = "RoundSummary",
+                roundIndex = roundIndex,
+                duration = Time.time - roundStartTime,
+                outcome = outcome,
+                leftScore = leftScore,
+                rightScore = rightScore,
+                left = leftRoundStats,
+                right = rightRoundStats
+            };
+
+            File.AppendAllText(evaluationSummaryOutputPath, JsonUtility.ToJson(summary) + "\n", Encoding.UTF8);
+        }
+
+        private void EnsureEvaluationSummaryPathReady()
+        {
+            if (string.IsNullOrEmpty(outputDirectoryPath))
+            {
+                outputDirectoryPath = Path.Combine(Application.persistentDataPath, outputDirectoryName);
+            }
+
+            Directory.CreateDirectory(outputDirectoryPath);
+
+            if (string.IsNullOrEmpty(evaluationSummaryOutputPath))
+            {
+                evaluationSummaryOutputPath = Path.Combine(outputDirectoryPath, evaluationSummaryFileName);
+            }
+        }
+
+        private ArenaCausalStepResult ConsumePendingCausalResult(ArenaSide side)
+        {
+            if (side == ArenaSide.Left)
+            {
+                var result = pendingLeftCausalResult;
+                pendingLeftCausalResult = default;
+                return result;
+            }
+
+            var rightResult = pendingRightCausalResult;
+            pendingRightCausalResult = default;
+            return rightResult;
+        }
+
+        private ref ArenaCausalStepResult GetMutableCausalResult(ArenaSide side)
+        {
+            if (side == ArenaSide.Left)
+            {
+                return ref pendingLeftCausalResult;
+            }
+
+            return ref pendingRightCausalResult;
+        }
+
+        private ref ArenaRoundActorStats GetMutableStats(ArenaSide side)
+        {
+            if (side == ArenaSide.Left)
+            {
+                return ref leftRoundStats;
+            }
+
+            return ref rightRoundStats;
+        }
+
+        private string BuildCausalTags(ArenaObservationSnapshot observation, ArenaActionSnapshot action)
+        {
+            var builder = new StringBuilder();
+
+            switch (observation.targetType)
+            {
+                case ArenaTargetType.Base:
+                    AppendTag(builder, "return_to_base");
+                    break;
+                case ArenaTargetType.Opponent:
+                    AppendTag(builder, "chase_opponent");
+                    break;
+                default:
+                    AppendTag(builder, "target_item");
+                    break;
+            }
+
+            if (observation.selfHasItem)
+            {
+                AppendTag(builder, "self_has_item");
+                AppendTag(builder, "return_to_base");
+            }
+
+            if (observation.opponentHasItem)
+            {
+                AppendTag(builder, "opponent_has_item");
+                AppendTag(builder, "chase_opponent");
+            }
+
+            if (Vector2.Distance(observation.selfPosition, observation.opponentPosition) <= 1.1f)
+            {
+                AppendTag(builder, "shove_opportunity");
+            }
+
+            if (observation.wallAhead)
+            {
+                AppendTag(builder, "avoid_wall");
+            }
+
+            if (roundDurationSeconds > 0f
+                && observation.roundElapsedTime / roundDurationSeconds >= 0.8f)
+            {
+                AppendTag(builder, "time_pressure");
+            }
+
+            if (action.shovePressed)
+            {
+                AppendTag(builder, "shove_input");
+            }
+
+            return builder.ToString();
+        }
+
+        private static void AppendTag(StringBuilder builder, string tag)
+        {
+            if (builder.Length > 0)
+            {
+                builder.Append(',');
+            }
+
+            builder.Append(tag);
         }
 
         private static ArenaDqnAction ToDqnAction(ArenaActionSnapshot action)
@@ -639,7 +1063,7 @@ namespace DeepAIArena
 
         private IEnumerator ResetRoundAfterDelay()
         {
-            yield return new WaitForSeconds(1.25f);
+            yield return new WaitForSeconds(roundResetDelaySeconds);
             BeginRound();
         }
 
@@ -720,6 +1144,7 @@ namespace DeepAIArena
         [System.Serializable]
         private struct ArenaStepLog
         {
+            public string logType;
             public string actorSide;
             public int roundIndex;
             public float timestamp;

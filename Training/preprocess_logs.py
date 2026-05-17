@@ -59,6 +59,9 @@ def parse_step_rows(log_path: Path) -> list[dict]:
                 continue
 
             payload = json.loads(line)
+            if payload.get("logType") not in (None, "Step"):
+                continue
+
             if "observation" not in payload or "action" not in payload:
                 continue
 

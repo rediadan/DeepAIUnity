@@ -4,7 +4,8 @@ This folder trains top-view arena agents from player logs.
 
 ## Current Input Features
 
-Each frame uses 21 features.
+BC/DQN Python scripts keep the legacy 21-feature sequence input for existing ONNX compatibility.
+Unity ML-Agents uses the live 25-feature observation from `ArenaMlAgent`.
 
 - self position
 - opponent position
@@ -21,6 +22,14 @@ Each frame uses 21 features.
 - round elapsed time
 
 With `--sequence-length 4`, the model input size is `21 * 4 = 84`.
+
+ML-Agents observation size is 25:
+
+- the 21 legacy fields above
+- distance to item
+- distance to base
+- distance to opponent
+- distance to current target
 
 ## BC Training
 
@@ -62,3 +71,31 @@ Put the exported `.onnx` and `.stats.json` files under `Assets`, then assign the
 - `RuleBased`: collect logs
 - `OnnxInference`: run BC
 - `DqnInference`: run DQN
+
+## ML-Agents Training
+
+Unity-side ML-Agents training uses `ArenaMlAgent`, not the existing ONNX runner.
+
+1. In Unity, set either `Left Actor Mode` or `Right Actor Mode` to `MlAgents`.
+2. Keep the other actor as `RuleBased`, `DqnInference`, or `Human` depending on the experiment.
+3. Start training from the project root:
+
+```cmd
+mlagents-learn Training\mlagents\arena_rl_only.yaml --run-id arena_rl_only
+```
+
+Then press Play in Unity.
+
+For imitation-assisted training, record demonstrations with Unity's `Demonstration Recorder` on the actor that has `ArenaMlAgent`.
+Save the `.demo` files under `Training\mlagents\demos`, then run:
+
+```cmd
+mlagents-learn Training\mlagents\arena_bc_rl.yaml --run-id arena_bc_rl
+```
+
+ML-Agents action branches:
+
+- branch 0: `Idle / Up / Down / Left / Right`
+- branch 1: `No Shove / Shove`
+
+The behavior name is fixed to `ArenaMlAgent`.

@@ -1,4 +1,6 @@
 using UnityEngine;
+using Unity.MLAgents;
+using Unity.MLAgents.Policies;
 
 namespace DeepAIArena
 {
@@ -171,6 +173,12 @@ namespace DeepAIArena
             var controller = actorObject.AddComponent<ArenaCharacterController>();
             controller.Side = side;
             controller.IsGhost = isGhost;
+
+            actorObject.AddComponent<BehaviorParameters>();
+            var decisionRequester = actorObject.AddComponent<DecisionRequester>();
+            decisionRequester.enabled = false;
+            var mlAgent = actorObject.AddComponent<ArenaMlAgent>();
+            mlAgent.SetControlActive(false);
 
             var ghostController = actorObject.AddComponent<ArenaGhostController>();
             var onnxPolicy = actorObject.AddComponent<ArenaGhostOnnxPolicy>();

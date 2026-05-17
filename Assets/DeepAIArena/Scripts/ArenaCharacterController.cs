@@ -217,11 +217,14 @@ namespace DeepAIArena
 
             if (other == null)
             {
+                arenaGameManager?.ReportShoveAttempt(Side, false, false);
                 lastShoveTime = Time.time;
                 return;
             }
 
             var forceDirection = ((Vector2)(other.transform.position - transform.position)).normalized;
+            var forcedItemDrop = other.HasItem;
+            arenaGameManager?.ReportShoveAttempt(Side, true, forcedItemDrop);
             other.ApplyKnockback(forceDirection, shoveForce, knockbackControlLockDuration);
 
             if (other.HasItem)
