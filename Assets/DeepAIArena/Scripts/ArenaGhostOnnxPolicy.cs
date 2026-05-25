@@ -31,6 +31,7 @@ namespace DeepAIArena
     public class ArenaGhostOnnxPolicy : MonoBehaviour
     {
         private const int BaseFeatureCount = 21;
+        private const int V2FeatureCount = 36;
         private const float GuardArrivalDistance = 0.35f;
         private const float GuardAlignmentThreshold = 0.25f;
         private const float SideDividerBypassX = 7.15f;
@@ -68,6 +69,7 @@ namespace DeepAIArena
         private bool attemptedInitialization;
         private bool initializationSucceeded;
         private int expectedFeatureCount = BaseFeatureCount;
+        private int perFrameFeatureCount = BaseFeatureCount;
         private float lastObservedRoundElapsedTime = -1f;
         private Vector2 heldGuardWaypoint;
         private string heldGuardWaypointName;
@@ -174,8 +176,14 @@ namespace DeepAIArena
             }
 
             expectedFeatureCount = stats.feature_mean.Length;
-            if (expectedFeatureCount % BaseFeatureCount == 0)
+            if (expectedFeatureCount % V2FeatureCount == 0)
             {
+                perFrameFeatureCount = V2FeatureCount;
+                sequenceLength = Mathf.Max(1, expectedFeatureCount / V2FeatureCount);
+            }
+            else if (expectedFeatureCount % BaseFeatureCount == 0)
+            {
+                perFrameFeatureCount = BaseFeatureCount;
                 sequenceLength = Mathf.Max(1, expectedFeatureCount / BaseFeatureCount);
             }
 
@@ -480,34 +488,21 @@ namespace DeepAIArena
             var mirroredBaseDeltaX = MirrorSignedX(observation.baseDelta.x, isRightSideActor);
             var mirroredOpponentDeltaX = MirrorSignedX(observation.opponentDelta.x, isRightSideActor);
 
-            var currentFrameValues = new[]
-            {
+            var currentFrameValues = BuildFrameValues(
+                observation,
                 mirroredSelfPositionX,
-                observation.selfPosition.y,
                 mirroredOpponentPositionX,
-                observation.opponentPosition.y,
                 mirroredItemPositionX,
-                observation.itemPosition.y,
                 mirroredBasePositionX,
-                observation.basePosition.y,
-                observation.selfHasItem ? 1f : 0f,
-                observation.opponentHasItem ? 1f : 0f,
-                mirroredItemDeltaX,
-                observation.itemDelta.y,
-                mirroredBaseDeltaX,
-                observation.baseDelta.y,
-                mirroredOpponentDeltaX,
-                observation.opponentDelta.y,
                 mirroredTargetPositionX,
-                observation.targetPosition.y,
-                (float)observation.targetType,
-                observation.wallAhead ? 1f : 0f,
-                observation.roundElapsedTime
-            };
+                mirroredItemDeltaX,
+                mirroredBaseDeltaX,
+                mirroredOpponentDeltaX,
+                isRightSideActor);
 
-            if (currentFrameValues.Length != BaseFeatureCount)
+            if (currentFrameValues.Length != perFrameFeatureCount)
             {
-                Debug.LogWarning($"Per-frame observation feature count mismatch. expected={BaseFeatureCount}, actual={currentFrameValues.Length}", this);
+                Debug.LogWarning($"Per-frame observation feature count mismatch. expected={perFrameFeatureCount}, actual={currentFrameValues.Length}", this);
             }
 
             UpdateObservationHistory(currentFrameValues, observation.roundElapsedTime);
@@ -534,6 +529,69 @@ namespace DeepAIArena
             }
 
             return normalized;
+        }
+
+        private float[] BuildFrameValues(
+            ArenaObservationSnapshot observation,
+            float mirroredSelfPositionX,
+            float mirroredOpponentPositionX,
+            float mirroredItemPositionX,
+            float mirroredBasePositionX,
+            float mirroredTargetPositionX,
+            float mirroredItemDeltaX,
+            float mirroredBaseDeltaX,
+            float mirroredOpponentDeltaX,
+            bool isRightSideActor)
+        {
+            var legacyValues = new[]
+            {
+                mirroredSelfPositionX,
+                observation.selfPosition.y,
+                mirroredOpponentPositionX,
+                observation.opponentPosition.y,
+                mirroredItemPositionX,
+                observation.itemPosition.y,
+                mirroredBasePositionX,
+                observation.basePosition.y,
+                observation.selfHasItem ? 1f : 0f,
+                observation.opponentHasItem ? 1f : 0f,
+                mirroredItemDeltaX,
+                observation.itemDelta.y,
+                mirroredBaseDeltaX,
+                observation.baseDelta.y,
+                mirroredOpponentDeltaX,
+                observation.opponentDelta.y,
+                mirroredTargetPositionX,
+                observation.targetPosition.y,
+                (float)observation.targetType,
+                observation.wallAhead ? 1f : 0f,
+                observation.roundElapsedTime
+            };
+
+            if (perFrameFeatureCount == BaseFeatureCount)
+            {
+                return legacyValues;
+            }
+
+            var values = new float[V2FeatureCount];
+            Array.Copy(legacyValues, values, legacyValues.Length);
+            var writeIndex = legacyValues.Length;
+            values[writeIndex++] = observation.distanceToItem;
+            values[writeIndex++] = observation.distanceToBase;
+            values[writeIndex++] = observation.distanceToOpponent;
+            values[writeIndex++] = observation.distanceToTarget;
+            values[writeIndex++] = MirrorSignedX(observation.doorDelta.x, isRightSideActor);
+            values[writeIndex++] = observation.doorDelta.y;
+            values[writeIndex++] = observation.doorOpen ? 1f : 0f;
+            values[writeIndex++] = MirrorSignedX(observation.switchDelta.x, isRightSideActor);
+            values[writeIndex++] = observation.switchDelta.y;
+            values[writeIndex++] = observation.switchActive ? 1f : 0f;
+            values[writeIndex++] = MirrorSignedX(observation.movingObstacleDelta.x, isRightSideActor);
+            values[writeIndex++] = observation.movingObstacleDelta.y;
+            values[writeIndex++] = MirrorSignedX(observation.movingObstacleVelocity.x, isRightSideActor);
+            values[writeIndex++] = observation.movingObstacleVelocity.y;
+            values[writeIndex] = observation.movingObstacleAhead ? 1f : 0f;
+            return values;
         }
 
         private float[] EnsureExpectedInputLength(float[] values)
@@ -579,12 +637,12 @@ namespace DeepAIArena
                 frames.Insert(0, frames[0]);
             }
 
-            var flattened = new float[frames.Count * BaseFeatureCount];
+            var flattened = new float[frames.Count * perFrameFeatureCount];
             var writeIndex = 0;
             foreach (var frame in frames)
             {
-                Array.Copy(frame, 0, flattened, writeIndex, Mathf.Min(frame.Length, BaseFeatureCount));
-                writeIndex += BaseFeatureCount;
+                Array.Copy(frame, 0, flattened, writeIndex, Mathf.Min(frame.Length, perFrameFeatureCount));
+                writeIndex += perFrameFeatureCount;
             }
 
             return flattened;

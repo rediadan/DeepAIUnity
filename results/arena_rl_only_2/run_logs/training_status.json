@@ -1,0 +1,29 @@
+{
+    "ArenaMlAgent": {
+        "checkpoints": [
+            {
+                "steps": 4992,
+                "file_path": "results\\arena_rl_only_2\\ArenaMlAgent\\ArenaMlAgent-4992.onnx",
+                "reward": null,
+                "creation_time": 1779011246.3421414,
+                "auxillary_file_paths": [
+                    "results\\arena_rl_only_2\\ArenaMlAgent\\ArenaMlAgent-4992.pt"
+                ]
+            }
+        ],
+        "final_checkpoint": {
+            "steps": 4992,
+            "file_path": "results\\arena_rl_only_2\\ArenaMlAgent.onnx",
+            "reward": null,
+            "creation_time": 1779011246.3421414,
+            "auxillary_file_paths": [
+                "results\\arena_rl_only_2\\ArenaMlAgent\\ArenaMlAgent-4992.pt"
+            ]
+        }
+    },
+    "metadata": {
+        "stats_format_version": "0.3.0",
+        "mlagents_version": "1.1.0",
+        "torch_version": "2.6.0+cu124"
+    }
+}

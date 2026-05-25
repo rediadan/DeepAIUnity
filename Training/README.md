@@ -5,7 +5,7 @@ This folder trains top-view arena agents from player logs.
 ## Current Input Features
 
 BC/DQN Python scripts keep the legacy 21-feature sequence input for existing ONNX compatibility.
-Unity ML-Agents uses the live 25-feature observation from `ArenaMlAgent`.
+Unity ML-Agents uses the live 36-feature v2 observation from `ArenaMlAgent`.
 
 - self position
 - opponent position
@@ -23,13 +23,20 @@ Unity ML-Agents uses the live 25-feature observation from `ArenaMlAgent`.
 
 With `--sequence-length 4`, the model input size is `21 * 4 = 84`.
 
-ML-Agents observation size is 25:
+Legacy ML-Agents observation size was 25:
 
 - the 21 legacy fields above
 - distance to item
 - distance to base
 - distance to opponent
 - distance to current target
+
+Arena v2 observation size is 36:
+
+- the 25 fields above
+- nearest door delta and open state
+- nearest switch delta and active state
+- nearest moving obstacle delta, velocity, and ahead flag
 
 ## BC Training
 
@@ -99,3 +106,28 @@ ML-Agents action branches:
 - branch 1: `No Shove / Shove`
 
 The behavior name is fixed to `ArenaMlAgent`.
+
+## Arena v2 Experiments
+
+Arena v2 adds switch-controlled doors and moving obstacles. Keep v1 datasets and models separate from v2 outputs.
+
+1. Collect v2 logs into `Training\dataset_v2`.
+2. Run the v2 experiment batch:
+
+```cmd
+Training\run_dqn_v2_experiments.bat
+```
+
+This creates:
+
+- `Training\data\arena_bc_v2_dataset.npz`
+- `Training\data\arena_dqn_v2_dataset.npz`
+- `Training\models\v2\...`
+- `Training\experiments\dqn\...`
+- `Training\experiments\causal\...`
+
+ML-Agents v2 training uses the same behavior name with the 36-feature live observation:
+
+```cmd
+mlagents-learn Training\mlagents\arena_rl_only_v2.yaml --run-id arena_rl_only_v2
+```

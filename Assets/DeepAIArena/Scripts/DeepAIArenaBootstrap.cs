@@ -8,12 +8,21 @@ namespace DeepAIArena
 
         private void Awake()
         {
-            if (!Application.isPlaying || !buildOnPlay)
+            if (!Application.isPlaying)
             {
                 return;
             }
 
-            if (FindAnyObjectByType<ArenaGameManager>() != null)
+            var manager = FindAnyObjectByType<ArenaGameManager>();
+            if (manager != null)
+            {
+                var arenaRoot = manager.transform.parent != null ? manager.transform.parent : transform;
+                ArenaBuilder.EnsureV2Environment(arenaRoot);
+                manager.RefreshEnvironmentReferences();
+                return;
+            }
+
+            if (!buildOnPlay)
             {
                 return;
             }

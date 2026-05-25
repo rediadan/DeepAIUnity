@@ -76,6 +76,13 @@ namespace DeepAIArena
         public ArenaTargetType targetType;
         public bool wallAhead;
         public float roundElapsedTime;
+        public Vector2 doorDelta;
+        public bool doorOpen;
+        public Vector2 switchDelta;
+        public bool switchActive;
+        public Vector2 movingObstacleDelta;
+        public Vector2 movingObstacleVelocity;
+        public bool movingObstacleAhead;
     }
 
     [System.Serializable]
@@ -148,6 +155,8 @@ namespace DeepAIArena
         public int rightScore;
         public ArenaRoundActorStats left;
         public ArenaRoundActorStats right;
+        public int doorOpenCount;
+        public int switchActivationCount;
     }
 
     [System.Serializable]
@@ -161,6 +170,7 @@ namespace DeepAIArena
         public int shoveSuccessCount;
         public int forcedItemDropCount;
         public float wallBlockedTime;
+        public float movingObstacleBlockedTime;
         public float idleTime;
     }
 
@@ -177,6 +187,9 @@ namespace DeepAIArena
         [SerializeField] private ArenaCharacterController ghost;
         [SerializeField] private ArenaItem item;
         [SerializeField] private ArenaBaseZone sharedBase;
+        [SerializeField] private ArenaDoor[] arenaDoors;
+        [SerializeField] private ArenaSwitch[] arenaSwitches;
+        [SerializeField] private ArenaMovingObstacle[] movingObstacles;
         [Header("Round Rules")]
         [SerializeField] private float roundDurationSeconds = 60f;
         [SerializeField] private float roundResetDelaySeconds = 1.25f;
@@ -208,6 +221,8 @@ namespace DeepAIArena
         private ArenaCausalStepResult pendingRightCausalResult;
         private ArenaRoundActorStats leftRoundStats;
         private ArenaRoundActorStats rightRoundStats;
+        private int roundDoorOpenCount;
+        private int roundSwitchActivationCount;
         private bool hasPreviousPlayerDqnStep;
         private ArenaObservationSnapshot previousPlayerObservation;
         private ArenaActionSnapshot previousPlayerAction;
@@ -215,6 +230,9 @@ namespace DeepAIArena
         public ArenaCharacterController Player => player;
         public ArenaCharacterController Ghost => ghost;
         public ArenaItem Item => item;
+        public ArenaDoor[] ArenaDoors => arenaDoors;
+        public ArenaSwitch[] ArenaSwitches => arenaSwitches;
+        public ArenaMovingObstacle[] MovingObstacles => movingObstacles;
         public Vector3[] ItemSpawnPoints => itemSpawnPoints;
         public ArenaSide LastScoringSide { get; private set; }
         public int RoundIndex => roundIndex;
@@ -266,6 +284,8 @@ namespace DeepAIArena
             ghost.Initialize(this);
             arenaSharedBase.Initialize(this);
             item.Initialize(this);
+            EnsureReferences();
+            InitializeEnvironmentObjects();
             ApplyActorControlModes();
 
             BeginRound();
@@ -295,6 +315,20 @@ namespace DeepAIArena
             }
 
             item ??= GetComponentInChildren<ArenaItem>(true);
+            if (arenaDoors == null || arenaDoors.Length == 0)
+            {
+                arenaDoors = GetArenaComponentsInScope<ArenaDoor>();
+            }
+
+            if (arenaSwitches == null || arenaSwitches.Length == 0)
+            {
+                arenaSwitches = GetArenaComponentsInScope<ArenaSwitch>();
+            }
+
+            if (movingObstacles == null || movingObstacles.Length == 0)
+            {
+                movingObstacles = GetArenaComponentsInScope<ArenaMovingObstacle>();
+            }
 
             if (sharedBase == null)
             {
@@ -314,6 +348,12 @@ namespace DeepAIArena
             }
         }
 
+        private T[] GetArenaComponentsInScope<T>() where T : Component
+        {
+            var scope = transform.parent != null ? transform.parent : transform;
+            return scope.GetComponentsInChildren<T>(true);
+        }
+
         private bool HasRequiredReferences()
         {
             return player != null && ghost != null && item != null && sharedBase != null;
@@ -325,7 +365,51 @@ namespace DeepAIArena
             ghost.Initialize(this);
             sharedBase.Initialize(this);
             item.Initialize(this);
+            InitializeEnvironmentObjects();
             ApplyActorControlModes();
+        }
+
+        private void InitializeEnvironmentObjects()
+        {
+            if (arenaDoors != null)
+            {
+                foreach (var arenaDoor in arenaDoors)
+                {
+                    if (arenaDoor != null)
+                    {
+                        arenaDoor.Initialize(this);
+                    }
+                }
+            }
+
+            if (arenaSwitches != null)
+            {
+                foreach (var arenaSwitch in arenaSwitches)
+                {
+                    if (arenaSwitch != null)
+                    {
+                        arenaSwitch.Initialize(this);
+                    }
+                }
+            }
+        }
+
+        public void RefreshEnvironmentReferences()
+        {
+            arenaDoors = GetArenaComponentsInScope<ArenaDoor>();
+            arenaSwitches = GetArenaComponentsInScope<ArenaSwitch>();
+            movingObstacles = GetArenaComponentsInScope<ArenaMovingObstacle>();
+            InitializeEnvironmentObjects();
+        }
+
+        private void EnsureEnvironmentReferencesAvailable()
+        {
+            if ((arenaDoors == null || arenaDoors.Length == 0)
+                && (arenaSwitches == null || arenaSwitches.Length == 0)
+                && (movingObstacles == null || movingObstacles.Length == 0))
+            {
+                RefreshEnvironmentReferences();
+            }
         }
 
         private void ApplyActorControlModes()
@@ -452,6 +536,7 @@ namespace DeepAIArena
             pendingRightCausalResult = default;
             hasPreviousPlayerDqnStep = false;
             ResetRoundStats();
+            ResetEnvironmentObjects();
             PrepareRoundLogFile();
 
             player.ResetActor(GetSpawnPoint(ArenaSide.Left));
@@ -459,6 +544,36 @@ namespace DeepAIArena
             item.ResetToSpawn(itemSpawnPoints[Random.Range(0, itemSpawnPoints.Length)]);
             ReportReward(ArenaRewardEventType.RoundStart, ArenaSide.Left, 0f, "round_start");
             ReportReward(ArenaRewardEventType.RoundStart, ArenaSide.Right, 0f, "round_start");
+        }
+
+        private void ResetEnvironmentObjects()
+        {
+            roundDoorOpenCount = 0;
+            roundSwitchActivationCount = 0;
+
+            if (arenaDoors != null)
+            {
+                foreach (var arenaDoor in arenaDoors)
+                {
+                    arenaDoor?.ResetDoor();
+                }
+            }
+
+            if (arenaSwitches != null)
+            {
+                foreach (var arenaSwitch in arenaSwitches)
+                {
+                    arenaSwitch?.ResetSwitch();
+                }
+            }
+
+            if (movingObstacles != null)
+            {
+                foreach (var movingObstacle in movingObstacles)
+                {
+                    movingObstacle?.ResetMotion();
+                }
+            }
         }
 
         private void Update()
@@ -490,6 +605,7 @@ namespace DeepAIArena
 
         public ArenaObservationSnapshot BuildObservation(ArenaSide side)
         {
+            EnsureEnvironmentReferencesAvailable();
             var self = side == ArenaSide.Left ? player : ghost;
             var opponent = side == ArenaSide.Left ? ghost : player;
             var basePosition = sharedBase != null ? (Vector2)sharedBase.transform.position : Vector2.zero;
@@ -501,6 +617,16 @@ namespace DeepAIArena
             var itemDelta = itemPosition - selfPosition;
             var baseDelta = basePosition - selfPosition;
             var opponentDelta = opponentPosition - selfPosition;
+            var nearestDoor = FindNearestDoor(selfPosition);
+            var nearestSwitch = FindNearestSwitch(selfPosition);
+            var nearestMovingObstacle = FindNearestMovingObstacle(selfPosition);
+            var doorPosition = nearestDoor != null ? (Vector2)nearestDoor.transform.position : selfPosition;
+            var switchPosition = nearestSwitch != null ? (Vector2)nearestSwitch.transform.position : selfPosition;
+            var movingObstaclePosition = nearestMovingObstacle != null
+                ? (Vector2)nearestMovingObstacle.transform.position
+                : selfPosition;
+            var movingObstacleDelta = movingObstaclePosition - selfPosition;
+            var movingObstacleVelocity = nearestMovingObstacle != null ? nearestMovingObstacle.Velocity : Vector2.zero;
 
             return new ArenaObservationSnapshot
             {
@@ -520,8 +646,112 @@ namespace DeepAIArena
                 targetPosition = targetPosition,
                 targetType = targetType,
                 wallAhead = self.IsWallAhead(),
-                roundElapsedTime = Time.time - roundStartTime
+                roundElapsedTime = Time.time - roundStartTime,
+                doorDelta = doorPosition - selfPosition,
+                doorOpen = nearestDoor == null || nearestDoor.IsOpen,
+                switchDelta = switchPosition - selfPosition,
+                switchActive = nearestSwitch != null && nearestSwitch.IsActive,
+                movingObstacleDelta = movingObstacleDelta,
+                movingObstacleVelocity = movingObstacleVelocity,
+                movingObstacleAhead = IsMovingObstacleAhead(selfPosition, targetPosition, movingObstacleDelta)
             };
+        }
+
+        private ArenaDoor FindNearestDoor(Vector2 position)
+        {
+            ArenaDoor nearest = null;
+            var nearestDistance = float.MaxValue;
+            if (arenaDoors == null)
+            {
+                return null;
+            }
+
+            foreach (var arenaDoor in arenaDoors)
+            {
+                if (arenaDoor == null)
+                {
+                    continue;
+                }
+
+                var distance = Vector2.SqrMagnitude((Vector2)arenaDoor.transform.position - position);
+                if (distance < nearestDistance)
+                {
+                    nearestDistance = distance;
+                    nearest = arenaDoor;
+                }
+            }
+
+            return nearest;
+        }
+
+        private ArenaSwitch FindNearestSwitch(Vector2 position)
+        {
+            ArenaSwitch nearest = null;
+            var nearestDistance = float.MaxValue;
+            if (arenaSwitches == null)
+            {
+                return null;
+            }
+
+            foreach (var arenaSwitch in arenaSwitches)
+            {
+                if (arenaSwitch == null)
+                {
+                    continue;
+                }
+
+                var distance = Vector2.SqrMagnitude((Vector2)arenaSwitch.transform.position - position);
+                if (distance < nearestDistance)
+                {
+                    nearestDistance = distance;
+                    nearest = arenaSwitch;
+                }
+            }
+
+            return nearest;
+        }
+
+        private ArenaMovingObstacle FindNearestMovingObstacle(Vector2 position)
+        {
+            ArenaMovingObstacle nearest = null;
+            var nearestDistance = float.MaxValue;
+            if (movingObstacles == null)
+            {
+                return null;
+            }
+
+            foreach (var movingObstacle in movingObstacles)
+            {
+                if (movingObstacle == null)
+                {
+                    continue;
+                }
+
+                var distance = Vector2.SqrMagnitude((Vector2)movingObstacle.transform.position - position);
+                if (distance < nearestDistance)
+                {
+                    nearestDistance = distance;
+                    nearest = movingObstacle;
+                }
+            }
+
+            return nearest;
+        }
+
+        private static bool IsMovingObstacleAhead(Vector2 selfPosition, Vector2 targetPosition, Vector2 obstacleDelta)
+        {
+            if (obstacleDelta.sqrMagnitude > 4f)
+            {
+                return false;
+            }
+
+            var targetDelta = targetPosition - selfPosition;
+            if (targetDelta.sqrMagnitude < 0.001f)
+            {
+                return false;
+            }
+
+            return Vector2.Dot(targetDelta.normalized, obstacleDelta.normalized) > 0.55f;
         }
 
         private ArenaTargetType ResolveTargetType(ArenaCharacterController self, ArenaCharacterController opponent)
@@ -589,6 +819,26 @@ namespace DeepAIArena
             var rightReward = pendingRightMlAgentReward;
             pendingRightMlAgentReward = 0f;
             return rightReward;
+        }
+
+        public void ReportDoorOpened(ArenaDoor arenaDoor)
+        {
+            if (arenaDoor == null || roundTransition)
+            {
+                return;
+            }
+
+            roundDoorOpenCount++;
+        }
+
+        public void ReportSwitchActivated(ArenaSwitch arenaSwitch)
+        {
+            if (arenaSwitch == null || roundTransition)
+            {
+                return;
+            }
+
+            roundSwitchActivationCount++;
         }
 
         public void ReportShoveAttempt(ArenaSide actorSide, bool succeeded, bool forcedItemDrop)
@@ -806,6 +1056,11 @@ namespace DeepAIArena
             {
                 stats.wallBlockedTime += Time.deltaTime;
             }
+
+            if (observation.movingObstacleAhead && action.moveAction != ArenaMoveAction.Idle)
+            {
+                stats.movingObstacleBlockedTime += Time.deltaTime;
+            }
         }
 
         private void ResetRoundStats()
@@ -869,7 +1124,9 @@ namespace DeepAIArena
                 leftScore = leftScore,
                 rightScore = rightScore,
                 left = leftRoundStats,
-                right = rightRoundStats
+                right = rightRoundStats,
+                doorOpenCount = roundDoorOpenCount,
+                switchActivationCount = roundSwitchActivationCount
             };
 
             File.AppendAllText(evaluationSummaryOutputPath, JsonUtility.ToJson(summary) + "\n", Encoding.UTF8);
@@ -961,6 +1218,34 @@ namespace DeepAIArena
             if (observation.wallAhead)
             {
                 AppendTag(builder, "avoid_wall");
+            }
+
+            if (observation.doorOpen)
+            {
+                AppendTag(builder, "door_open");
+            }
+            else
+            {
+                AppendTag(builder, "door_closed");
+                if (observation.doorDelta.sqrMagnitude <= 6.25f)
+                {
+                    AppendTag(builder, "shortcut_blocked");
+                    AppendTag(builder, "detour_needed");
+                }
+            }
+
+            if (observation.switchActive)
+            {
+                AppendTag(builder, "switch_active");
+            }
+            else if (observation.switchDelta.sqrMagnitude <= 9f)
+            {
+                AppendTag(builder, "switch_available");
+            }
+
+            if (observation.movingObstacleAhead)
+            {
+                AppendTag(builder, "moving_obstacle_ahead");
             }
 
             if (roundDurationSeconds > 0f
@@ -1075,11 +1360,12 @@ namespace DeepAIArena
             }
 
             GUI.color = Color.white;
-            GUILayout.BeginArea(new Rect(10f, 10f, 620f, 255f), GUI.skin.box);
+            GUILayout.BeginArea(new Rect(10f, 10f, 620f, 300f), GUI.skin.box);
             GUILayout.Label("Deep AI Arena Prototype");
             GUILayout.Label($"Score  Left {leftScore} : {rightScore} Right");
             GUILayout.Label($"Control  Left: {leftActorMode} / Right: {rightActorMode}");
             GUILayout.Label($"Item lane: {GetLaneName(item.transform.position.y)}");
+            GUILayout.Label($"V2 env  Doors opened: {roundDoorOpenCount} / Switches: {roundSwitchActivationCount}");
             GUILayout.Label($"Route  Left: {(player != null ? player.DebugRouteName : "N/A")} / Right: {(ghost != null ? ghost.DebugRouteName : "N/A")}");
             var leftObservation = BuildObservation(ArenaSide.Left);
             var rightObservation = BuildObservation(ArenaSide.Right);
@@ -1087,6 +1373,9 @@ namespace DeepAIArena
                 + $"dist {Vector2.Distance(leftObservation.selfPosition, leftObservation.targetPosition):0.00}");
             GUILayout.Label($"Right target: {rightObservation.targetType} {FormatVector2(rightObservation.targetPosition)} "
                 + $"dist {Vector2.Distance(rightObservation.selfPosition, rightObservation.targetPosition):0.00}");
+            GUILayout.Label($"Left env: door {(leftObservation.doorOpen ? "open" : "closed")} "
+                + $"switch {(leftObservation.switchActive ? "active" : "idle")} "
+                + $"movingAhead {leftObservation.movingObstacleAhead}");
             var ghostController = ghost != null ? ghost.GetComponent<ArenaGhostController>() : null;
             var playerGhostController = player != null ? player.GetComponent<ArenaGhostController>() : null;
             GUILayout.Label($"Runtime  Left: {FormatActorRuntime(playerGhostController, leftActorMode)} "

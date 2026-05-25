@@ -1,0 +1,56 @@
+{
+    "ArenaMlAgent": {
+        "checkpoints": [
+            {
+                "steps": 49975,
+                "file_path": "results\\arena_rl_only_4\\ArenaMlAgent\\ArenaMlAgent-49975.onnx",
+                "reward": 0.6928415567510657,
+                "creation_time": 1779014548.7745972,
+                "auxillary_file_paths": [
+                    "results\\arena_rl_only_4\\ArenaMlAgent\\ArenaMlAgent-49975.pt"
+                ]
+            },
+            {
+                "steps": 99981,
+                "file_path": "results\\arena_rl_only_4\\ArenaMlAgent\\ArenaMlAgent-99981.onnx",
+                "reward": 5.739285860429792,
+                "creation_time": 1779015045.7186537,
+                "auxillary_file_paths": [
+                    "results\\arena_rl_only_4\\ArenaMlAgent\\ArenaMlAgent-99981.pt"
+                ]
+            },
+            {
+                "steps": 149978,
+                "file_path": "results\\arena_rl_only_4\\ArenaMlAgent\\ArenaMlAgent-149978.onnx",
+                "reward": 5.9792561537616855,
+                "creation_time": 1779015545.200661,
+                "auxillary_file_paths": [
+                    "results\\arena_rl_only_4\\ArenaMlAgent\\ArenaMlAgent-149978.pt"
+                ]
+            },
+            {
+                "steps": 177535,
+                "file_path": "results\\arena_rl_only_4\\ArenaMlAgent\\ArenaMlAgent-177535.onnx",
+                "reward": 5.903887487877652,
+                "creation_time": 1779015859.9865274,
+                "auxillary_file_paths": [
+                    "results\\arena_rl_only_4\\ArenaMlAgent\\ArenaMlAgent-177535.pt"
+                ]
+            }
+        ],
+        "final_checkpoint": {
+            "steps": 177535,
+            "file_path": "results\\arena_rl_only_4\\ArenaMlAgent.onnx",
+            "reward": 5.903887487877652,
+            "creation_time": 1779015859.9865274,
+            "auxillary_file_paths": [
+                "results\\arena_rl_only_4\\ArenaMlAgent\\ArenaMlAgent-177535.pt"
+            ]
+        }
+    },
+    "metadata": {
+        "stats_format_version": "0.3.0",
+        "mlagents_version": "1.1.0",
+        "torch_version": "2.6.0+cu124"
+    }
+}

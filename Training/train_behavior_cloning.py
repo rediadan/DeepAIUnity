@@ -19,6 +19,8 @@ class ArenaDataset(Dataset):
         self.x = ((x - self.feature_mean) / self.feature_std).astype(np.float32)
         self.move = data["move"].astype(np.int64)
         self.shove = data["shove"].astype(np.float32)
+        self.base_feature_count = int(data["base_feature_count"]) if "base_feature_count" in data.files else BASE_FEATURE_COUNT
+        self.feature_version = str(data["feature_version"]) if "feature_version" in data.files else "v1"
 
     def __len__(self) -> int:
         return len(self.x)
@@ -115,7 +117,11 @@ def main() -> None:
     )
 
     dataset = ArenaDataset(Path(args.dataset))
-    sequence_length = max(1, dataset.x.shape[1] // BASE_FEATURE_COUNT) if dataset.x.shape[1] % BASE_FEATURE_COUNT == 0 else 1
+    sequence_length = (
+        max(1, dataset.x.shape[1] // dataset.base_feature_count)
+        if dataset.x.shape[1] % dataset.base_feature_count == 0
+        else 1
+    )
     train_size = int(len(dataset) * 0.9)
     valid_size = len(dataset) - train_size
     train_set, valid_set = random_split(dataset, [train_size, valid_size], generator=torch.Generator().manual_seed(42))
@@ -156,7 +162,8 @@ def main() -> None:
             "hidden_size": config.hidden_size,
             "feature_mean": dataset.feature_mean,
             "feature_std": dataset.feature_std,
-            "base_feature_count": BASE_FEATURE_COUNT,
+            "base_feature_count": dataset.base_feature_count,
+            "feature_version": dataset.feature_version,
             "sequence_length": sequence_length,
         },
         output_path,

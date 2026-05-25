@@ -1,0 +1,68 @@
+{
+    "name": "root",
+    "metadata": {
+        "timer_format_version": "0.1.0",
+        "start_time_seconds": "1779010655",
+        "python_version": "3.10.9 (tags/v3.10.9:1dd9be6, Dec  6 2022, 20:01:21) [MSC v.1934 64 bit (AMD64)]",
+        "command_line_arguments": "C:\\Users\\User\\AppData\\Local\\Programs\\Python\\Python310\\Scripts\\mlagents-learn Training\\mlagents\\arena_rl_only.yaml --run-id arena_rl_only",
+        "mlagents_version": "1.1.0",
+        "mlagents_envs_version": "1.1.0",
+        "communication_protocol_version": "1.5.0",
+        "pytorch_version": "2.6.0+cu124",
+        "numpy_version": "1.23.5",
+        "end_time_seconds": "1779010851"
+    },
+    "total": 195.0458524000005,
+    "count": 1,
+    "self": 0.00743260000126611,
+    "children": {
+        "run_training.setup": {
+            "total": 0.1493267999994714,
+            "count": 1,
+            "self": 0.1493267999994714
+        },
+        "TrainerController.start_learning": {
+            "total": 194.88909299999978,
+            "count": 1,
+            "self": 0.00016489999870827887,
+            "children": {
+                "TrainerController._reset_env": {
+                    "total": 28.97654270000021,
+                    "count": 1,
+                    "self": 28.97654270000021
+                },
+                "TrainerController.advance": {
+                    "total": 165.31559160000052,
+                    "count": 1,
+                    "self": 1.990000055229757e-05,
+                    "children": {
+                        "env_step": {
+                            "total": 165.31557169999996,
+                            "count": 1,
+                            "self": 165.3155665000004,
+                            "children": {
+                                "SubprocessEnvManager._take_step": {
+                                    "total": 5.199999577598646e-06,
+                                    "count": 1,
+                                    "self": 5.199999577598646e-06
+                                }
+                            }
+                        }
+                    }
+                },
+                "TrainerController._save_models": {
+                    "total": 0.5967938000003414,
+                    "count": 1,
+                    "self": 0.02864789999966888,
+                    "children": {
+                        "RLTrainer._checkpoint": {
+                            "total": 0.5681459000006726,
+                            "count": 1,
+                            "self": 0.5681459000006726
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

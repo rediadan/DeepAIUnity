@@ -11,7 +11,7 @@ namespace DeepAIArena
     [RequireComponent(typeof(DecisionRequester))]
     public class ArenaMlAgent : Agent
     {
-        private const int ObservationSize = 25;
+        private const int ObservationSize = 36;
         private const int MoveActionCount = 5;
         private const int ShoveActionCount = 2;
 
@@ -26,7 +26,7 @@ namespace DeepAIArena
         private bool hasPreviousObservation;
         private float previousDistanceToTarget;
         private int previousRoundIndex = -1;
-        private int endedRoundIndex = -1;
+        private bool episodeEndedForRound;
 
         public bool ControlActive => controlActive;
 
@@ -43,9 +43,9 @@ namespace DeepAIArena
 
         protected override void Awake()
         {
-            base.Awake();
             controller = GetComponent<ArenaCharacterController>();
             ConfigureMlAgentsComponents();
+            base.Awake();
         }
 
         private void Start()
@@ -64,7 +64,6 @@ namespace DeepAIArena
         {
             hasPreviousObservation = false;
             previousRoundIndex = manager != null ? manager.RoundIndex : -1;
-            endedRoundIndex = -1;
         }
 
         public override void CollectObservations(VectorSensor sensor)
@@ -96,6 +95,13 @@ namespace DeepAIArena
             sensor.AddObservation((float)observation.targetType);
             sensor.AddObservation(observation.wallAhead ? 1f : 0f);
             sensor.AddObservation(observation.roundElapsedTime);
+            AddObservation(sensor, observation.doorDelta);
+            sensor.AddObservation(observation.doorOpen ? 1f : 0f);
+            AddObservation(sensor, observation.switchDelta);
+            sensor.AddObservation(observation.switchActive ? 1f : 0f);
+            AddObservation(sensor, observation.movingObstacleDelta);
+            AddObservation(sensor, observation.movingObstacleVelocity);
+            sensor.AddObservation(observation.movingObstacleAhead ? 1f : 0f);
         }
 
         public override void OnActionReceived(ActionBuffers actions)
@@ -109,7 +115,7 @@ namespace DeepAIArena
             {
                 hasPreviousObservation = false;
                 previousRoundIndex = manager.RoundIndex;
-                endedRoundIndex = -1;
+                episodeEndedForRound = false;
             }
 
             var moveAction = Mathf.Clamp(actions.DiscreteActions[0], 0, MoveActionCount - 1);
@@ -158,7 +164,18 @@ namespace DeepAIArena
 
         private void Update()
         {
-            if (!controlActive || manager == null || !manager.IsRoundTransitioning)
+            if (!controlActive || manager == null)
+            {
+                return;
+            }
+
+            if (previousRoundIndex != manager.RoundIndex)
+            {
+                previousRoundIndex = manager.RoundIndex;
+                episodeEndedForRound = false;
+            }
+
+            if (!manager.IsRoundTransitioning)
             {
                 return;
             }
@@ -169,12 +186,12 @@ namespace DeepAIArena
 
         private void EndCurrentRoundEpisode()
         {
-            if (manager == null || endedRoundIndex == manager.RoundIndex)
+            if (manager == null || episodeEndedForRound)
             {
                 return;
             }
 
-            endedRoundIndex = manager.RoundIndex;
+            episodeEndedForRound = true;
             EndEpisode();
         }
 

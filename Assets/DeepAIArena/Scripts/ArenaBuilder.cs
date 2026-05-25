@@ -83,6 +83,43 @@ namespace DeepAIArena
 
             CreateObstacle(parent, new Vector2(-7.15f, 0f), new Vector2(0.5f, 2.6f), blockColor, "LeftStartDivider");
             CreateObstacle(parent, new Vector2(7.15f, 0f), new Vector2(0.5f, 2.6f), blockColor, "RightStartDivider");
+
+            BuildV2Complexity(parent);
+        }
+
+        public static void EnsureV2Environment(Transform arenaRoot)
+        {
+            if (arenaRoot == null || arenaRoot.Find("UpperShortcutDoor") != null)
+            {
+                return;
+            }
+
+            BuildV2Complexity(arenaRoot);
+        }
+
+        private static void BuildV2Complexity(Transform parent)
+        {
+            var upperDoor = CreateDoor(parent, new Vector2(0f, 1.15f), new Vector2(0.55f, 1.35f), "UpperShortcutDoor");
+            var lowerDoor = CreateDoor(parent, new Vector2(0f, -1.15f), new Vector2(0.55f, 1.15f), "LowerShortcutDoor");
+            CreateSwitch(parent, new Vector2(-3.2f, 0.75f), new Vector2(0.8f, 0.45f), upperDoor, "UpperDoorSwitch");
+            CreateSwitch(parent, new Vector2(3.2f, -2.05f), new Vector2(0.8f, 0.45f), lowerDoor, "LowerDoorSwitch");
+
+            CreateMovingObstacle(
+                parent,
+                new Vector2(-2.7f, 3.25f),
+                new Vector2(2.7f, 3.25f),
+                new Vector2(0.62f, 0.62f),
+                new Color(0.85f, 0.25f, 0.68f),
+                "TopMovingObstacle",
+                2.0f);
+            CreateMovingObstacle(
+                parent,
+                new Vector2(2.7f, -2.3f),
+                new Vector2(-2.7f, -2.3f),
+                new Vector2(0.62f, 0.62f),
+                new Color(0.85f, 0.25f, 0.68f),
+                "BottomMovingObstacle",
+                1.75f);
         }
 
         private static void CreateObstacle(Transform parent, Vector2 position, Vector2 scale, Color color, string name)
@@ -97,6 +134,79 @@ namespace DeepAIArena
             renderer.color = color;
 
             block.AddComponent<BoxCollider2D>();
+        }
+
+        private static ArenaDoor CreateDoor(Transform parent, Vector2 position, Vector2 scale, string name)
+        {
+            var doorObject = new GameObject(name);
+            doorObject.transform.SetParent(parent, false);
+            doorObject.transform.position = position;
+            doorObject.transform.localScale = scale;
+
+            var renderer = doorObject.AddComponent<SpriteRenderer>();
+            renderer.sprite = RuntimeSpriteLibrary.Square;
+            renderer.color = new Color(0.28f, 0.32f, 0.42f);
+            renderer.sortingOrder = 4;
+
+            doorObject.AddComponent<BoxCollider2D>();
+            return doorObject.AddComponent<ArenaDoor>();
+        }
+
+        private static ArenaSwitch CreateSwitch(
+            Transform parent,
+            Vector2 position,
+            Vector2 scale,
+            ArenaDoor linkedDoor,
+            string name)
+        {
+            var switchObject = new GameObject(name);
+            switchObject.transform.SetParent(parent, false);
+            switchObject.transform.position = position;
+            switchObject.transform.localScale = scale;
+
+            var renderer = switchObject.AddComponent<SpriteRenderer>();
+            renderer.sprite = RuntimeSpriteLibrary.Square;
+            renderer.color = new Color(0.2f, 0.48f, 0.85f);
+            renderer.sortingOrder = 3;
+
+            var collider = switchObject.AddComponent<BoxCollider2D>();
+            collider.isTrigger = true;
+
+            var arenaSwitch = switchObject.AddComponent<ArenaSwitch>();
+            arenaSwitch.SetLinkedDoor(linkedDoor);
+            arenaSwitch.SetDoorOpenSeconds(linkedDoor != null ? linkedDoor.HoldOpenSeconds : 2.5f);
+            return arenaSwitch;
+        }
+
+        private static ArenaMovingObstacle CreateMovingObstacle(
+            Transform parent,
+            Vector2 pointA,
+            Vector2 pointB,
+            Vector2 scale,
+            Color color,
+            string name,
+            float speed)
+        {
+            var obstacleObject = new GameObject(name);
+            obstacleObject.transform.SetParent(parent, false);
+            obstacleObject.transform.position = pointA;
+            obstacleObject.transform.localScale = scale;
+
+            var renderer = obstacleObject.AddComponent<SpriteRenderer>();
+            renderer.sprite = RuntimeSpriteLibrary.Square;
+            renderer.color = color;
+            renderer.sortingOrder = 4;
+
+            obstacleObject.AddComponent<BoxCollider2D>();
+            var rigidbody = obstacleObject.AddComponent<Rigidbody2D>();
+            rigidbody.gravityScale = 0f;
+            rigidbody.freezeRotation = true;
+            rigidbody.bodyType = RigidbodyType2D.Kinematic;
+
+            var movingObstacle = obstacleObject.AddComponent<ArenaMovingObstacle>();
+            movingObstacle.Configure(pointA, pointB, speed);
+            movingObstacle.ResetMotion();
+            return movingObstacle;
         }
 
         private static void CreateVisualZone(Transform parent, Vector2 position, Vector2 scale, Color color, string name)

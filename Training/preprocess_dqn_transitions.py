@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
-from preprocess_logs import build_feature_vector, collect_log_files
+from preprocess_logs import LEGACY_FEATURE_COUNT, V2_FEATURE_COUNT, build_feature_vector, collect_log_files
 
 
 def parse_transition_rows(log_path: Path) -> list[dict]:
@@ -41,9 +41,9 @@ def flatten_window(window: list[list[float]]) -> list[float]:
     return flattened
 
 
-def build_transition_sequences(rows: list[dict], sequence_length: int):
-    state_frames = [build_feature_vector(row["state"]) for row in rows]
-    next_state_frames = [build_feature_vector(row["nextState"]) for row in rows]
+def build_transition_sequences(rows: list[dict], sequence_length: int, feature_version: str):
+    state_frames = [build_feature_vector(row["state"], feature_version) for row in rows]
+    next_state_frames = [build_feature_vector(row["nextState"], feature_version) for row in rows]
 
     states = []
     next_states = []
@@ -70,7 +70,9 @@ def main() -> None:
     parser.add_argument("--input", required=True, help="Path to a round log file or a directory of round log files")
     parser.add_argument("--output", required=True, help="Output NPZ replay dataset path")
     parser.add_argument("--sequence-length", type=int, default=4, help="Number of consecutive frames per DQN state")
+    parser.add_argument("--feature-version", default="v1", choices=["v1", "v2"], help="Observation feature schema to use")
     args = parser.parse_args()
+    per_frame_feature_count = V2_FEATURE_COUNT if args.feature_version == "v2" else LEGACY_FEATURE_COUNT
 
     input_path = Path(args.input)
     output_path = Path(args.output)
@@ -91,6 +93,7 @@ def main() -> None:
         round_states, round_actions, round_rewards, round_next_states, round_dones = build_transition_sequences(
             rows,
             args.sequence_length,
+            args.feature_version,
         )
         states.extend(round_states)
         actions.extend(round_actions)
@@ -122,11 +125,15 @@ def main() -> None:
         done=done,
         feature_mean=feature_mean.astype(np.float32),
         feature_std=feature_std.astype(np.float32),
+        feature_version=np.asarray(args.feature_version),
+        base_feature_count=np.asarray(per_frame_feature_count, dtype=np.int64),
+        sequence_length=np.asarray(args.sequence_length, dtype=np.int64),
     )
 
     print(f"Saved DQN dataset to {output_path}")
     print(f"Transitions: {len(state)}")
     print(f"Features: {state.shape[1]}")
+    print(f"Per-frame features: {per_frame_feature_count}")
     print(f"Rounds: {processed_rounds}")
     print(f"Sequence length: {args.sequence_length}")
 

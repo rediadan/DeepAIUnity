@@ -118,15 +118,31 @@ namespace DeepAIArena
                 RuntimeMode = ArenaGhostRuntimeMode.RuleBased;
             }
 
-            var target = GetTargetPoint(out var routeName);
+            var observation = manager.BuildObservation(controller.Side);
+            var target = GetTargetPoint(observation, out var routeName);
             var delta = target - (Vector2)transform.position;
             var move = delta.sqrMagnitude > 0.08f ? delta.normalized : Vector2.zero;
+            if (observation.movingObstacleAhead && move.sqrMagnitude > 0.0001f)
+            {
+                move = ChooseObstacleAvoidanceMove(move);
+                routeName = "AvoidMovingObstacle";
+            }
+
             var shove = ShouldShove();
             controller.SetGhostInput(move, shove, routeName);
         }
 
-        private Vector2 GetTargetPoint(out string routeName)
+        private Vector2 GetTargetPoint(ArenaObservationSnapshot observation, out string routeName)
         {
+            if (!observation.doorOpen
+                && !observation.switchActive
+                && observation.doorDelta.sqrMagnitude <= 9f
+                && observation.switchDelta.sqrMagnitude <= 25f)
+            {
+                routeName = "Switch";
+                return observation.selfPosition + observation.switchDelta;
+            }
+
             if (controller.HasItem)
             {
                 routeName = "Escape";
@@ -152,6 +168,12 @@ namespace DeepAIArena
 
             routeName = "Center";
             return preferIntercept ? opponentPosition : itemPosition;
+        }
+
+        private static Vector2 ChooseObstacleAvoidanceMove(Vector2 move)
+        {
+            var perpendicular = new Vector2(-move.y, move.x);
+            return perpendicular.sqrMagnitude > 0.0001f ? perpendicular.normalized : Vector2.up;
         }
 
         private bool ShouldShove()

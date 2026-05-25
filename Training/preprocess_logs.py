@@ -4,9 +4,36 @@ from pathlib import Path
 
 import numpy as np
 
+LEGACY_FEATURE_COUNT = 21
+V2_FEATURE_COUNT = 36
 
-def build_feature_vector(observation: dict) -> list[float]:
-    return [
+
+def _vec2(observation: dict, key: str) -> dict:
+    value = observation.get(key) or {}
+    return {
+        "x": float(value.get("x", 0.0)),
+        "y": float(value.get("y", 0.0)),
+    }
+
+
+def _distance_from_delta(observation: dict, key: str) -> float:
+    value = _vec2(observation, key)
+    return float(np.hypot(value["x"], value["y"]))
+
+
+def _normalize_feature_version(feature_version: str) -> str:
+    normalized = feature_version.lower()
+    if normalized in ("v1", "legacy"):
+        return "v1"
+    if normalized == "v2":
+        return "v2"
+
+    raise ValueError(f"Unsupported feature version: {feature_version}")
+
+
+def build_feature_vector(observation: dict, feature_version: str = "v1") -> list[float]:
+    feature_version = _normalize_feature_version(feature_version)
+    legacy = [
         observation["selfPosition"]["x"],
         observation["selfPosition"]["y"],
         observation["opponentPosition"]["x"],
@@ -28,6 +55,31 @@ def build_feature_vector(observation: dict) -> list[float]:
         float(observation["targetType"]),
         1.0 if observation["wallAhead"] else 0.0,
         float(observation.get("roundElapsedTime", 0.0)),
+    ]
+
+    if feature_version == "v1":
+        return legacy
+
+    door_delta = _vec2(observation, "doorDelta")
+    switch_delta = _vec2(observation, "switchDelta")
+    moving_obstacle_delta = _vec2(observation, "movingObstacleDelta")
+    moving_obstacle_velocity = _vec2(observation, "movingObstacleVelocity")
+    return legacy + [
+        float(observation.get("distanceToItem", _distance_from_delta(observation, "itemDelta"))),
+        float(observation.get("distanceToBase", _distance_from_delta(observation, "baseDelta"))),
+        float(observation.get("distanceToOpponent", _distance_from_delta(observation, "opponentDelta"))),
+        float(observation.get("distanceToTarget", 0.0)),
+        door_delta["x"],
+        door_delta["y"],
+        1.0 if observation.get("doorOpen", True) else 0.0,
+        switch_delta["x"],
+        switch_delta["y"],
+        1.0 if observation.get("switchActive", False) else 0.0,
+        moving_obstacle_delta["x"],
+        moving_obstacle_delta["y"],
+        moving_obstacle_velocity["x"],
+        moving_obstacle_velocity["y"],
+        1.0 if observation.get("movingObstacleAhead", False) else 0.0,
     ]
 
 
@@ -96,10 +148,14 @@ def downsample_idle_rows(rows: list[dict], keep_ratio: float) -> list[dict]:
     return filtered
 
 
-def build_sequence_features(rows: list[dict], sequence_length: int) -> tuple[list[list[float]], list[dict]]:
+def build_sequence_features(
+    rows: list[dict],
+    sequence_length: int,
+    feature_version: str,
+) -> tuple[list[list[float]], list[dict]]:
     features: list[list[float]] = []
     targets: list[dict] = []
-    frame_features = [build_feature_vector(row["observation"]) for row in rows]
+    frame_features = [build_feature_vector(row["observation"], feature_version) for row in rows]
 
     for index, row in enumerate(rows):
         start_index = max(0, index - sequence_length + 1)
@@ -123,7 +179,10 @@ def main() -> None:
     parser.add_argument("--output", required=True, help="Output NPZ dataset path")
     parser.add_argument("--idle-keep-ratio", type=float, default=0.25, help="Ratio of idle-only rows to keep")
     parser.add_argument("--sequence-length", type=int, default=4, help="Number of consecutive frames to flatten into one training sample")
+    parser.add_argument("--feature-version", default="v1", choices=["v1", "v2"], help="Observation feature schema to use")
     args = parser.parse_args()
+    feature_version = _normalize_feature_version(args.feature_version)
+    per_frame_feature_count = V2_FEATURE_COUNT if feature_version == "v2" else LEGACY_FEATURE_COUNT
 
     input_path = Path(args.input)
     output_path = Path(args.output)
@@ -143,7 +202,7 @@ def main() -> None:
         if not rows:
             continue
 
-        sequence_features, sequence_actions = build_sequence_features(rows, args.sequence_length)
+        sequence_features, sequence_actions = build_sequence_features(rows, args.sequence_length, feature_version)
         features.extend(sequence_features)
 
         for action in sequence_actions:
@@ -170,11 +229,15 @@ def main() -> None:
         shove=shove,
         feature_mean=feature_mean,
         feature_std=feature_std,
+        feature_version=np.asarray(feature_version),
+        base_feature_count=np.asarray(per_frame_feature_count, dtype=np.int64),
+        sequence_length=np.asarray(args.sequence_length, dtype=np.int64),
     )
 
     print(f"Saved dataset to {output_path}")
     print(f"Samples: {len(x)}")
     print(f"Features: {x.shape[1]}")
+    print(f"Per-frame features: {per_frame_feature_count}")
     print(f"Rounds: {processed_rounds}")
     print(f"Sequence length: {args.sequence_length}")
 

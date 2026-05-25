@@ -1,9 +1,23 @@
 import argparse
 import json
+import sys
 from pathlib import Path
 
+import numpy as np
 import torch
 from torch import nn
+
+
+def load_torch_checkpoint(path: str):
+    try:
+        return torch.load(path, map_location="cpu", weights_only=False)
+    except ModuleNotFoundError as exception:
+        if exception.name != "numpy._core":
+            raise
+
+        sys.modules["numpy._core"] = np.core
+        sys.modules["numpy._core.multiarray"] = np.core.multiarray
+        return torch.load(path, map_location="cpu", weights_only=False)
 
 
 class BehaviorCloningExportModel(nn.Module):
@@ -38,7 +52,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+    checkpoint = load_torch_checkpoint(args.checkpoint)
     model = BehaviorCloningExportModel(
         input_size=checkpoint["input_size"],
         hidden_size=checkpoint["hidden_size"],
