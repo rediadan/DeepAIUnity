@@ -135,7 +135,7 @@ class Conv1dDqnModel(nn.Module):
         hidden_size: int = 64,
         action_count: int = ACTION_COUNT,
         sequence_length: int = 4,
-        base_feature_count: int = 36,
+        base_feature_count: int = 38,
     ):
         super().__init__()
         if input_size != sequence_length * base_feature_count:

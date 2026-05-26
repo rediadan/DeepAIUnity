@@ -32,6 +32,7 @@ namespace DeepAIArena
     {
         private const int BaseFeatureCount = 21;
         private const int V2FeatureCount = 36;
+        private const int V2RouteFeatureCount = 38;
         private const float GuardArrivalDistance = 0.35f;
         private const float GuardAlignmentThreshold = 0.25f;
         private const float SideDividerBypassX = 7.15f;
@@ -176,7 +177,12 @@ namespace DeepAIArena
             }
 
             expectedFeatureCount = stats.feature_mean.Length;
-            if (expectedFeatureCount % V2FeatureCount == 0)
+            if (expectedFeatureCount % V2RouteFeatureCount == 0)
+            {
+                perFrameFeatureCount = V2RouteFeatureCount;
+                sequenceLength = Mathf.Max(1, expectedFeatureCount / V2RouteFeatureCount);
+            }
+            else if (expectedFeatureCount % V2FeatureCount == 0)
             {
                 perFrameFeatureCount = V2FeatureCount;
                 sequenceLength = Mathf.Max(1, expectedFeatureCount / V2FeatureCount);
@@ -573,7 +579,7 @@ namespace DeepAIArena
                 return legacyValues;
             }
 
-            var values = new float[V2FeatureCount];
+            var values = new float[perFrameFeatureCount];
             Array.Copy(legacyValues, values, legacyValues.Length);
             var writeIndex = legacyValues.Length;
             values[writeIndex++] = observation.distanceToItem;
@@ -590,7 +596,13 @@ namespace DeepAIArena
             values[writeIndex++] = observation.movingObstacleDelta.y;
             values[writeIndex++] = MirrorSignedX(observation.movingObstacleVelocity.x, isRightSideActor);
             values[writeIndex++] = observation.movingObstacleVelocity.y;
-            values[writeIndex] = observation.movingObstacleAhead ? 1f : 0f;
+            values[writeIndex++] = observation.movingObstacleAhead ? 1f : 0f;
+            if (perFrameFeatureCount >= V2RouteFeatureCount)
+            {
+                values[writeIndex++] = observation.shortcutBlocked ? 1f : 0f;
+                values[writeIndex] = observation.detourNeeded ? 1f : 0f;
+            }
+
             return values;
         }
 

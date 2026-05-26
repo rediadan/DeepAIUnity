@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 
 LEGACY_FEATURE_COUNT = 21
-V2_FEATURE_COUNT = 36
+V2_FEATURE_COUNT = 38
 
 
 def _vec2(observation: dict, key: str) -> dict:
@@ -80,6 +80,8 @@ def build_feature_vector(observation: dict, feature_version: str = "v1") -> list
         moving_obstacle_velocity["x"],
         moving_obstacle_velocity["y"],
         1.0 if observation.get("movingObstacleAhead", False) else 0.0,
+        1.0 if observation.get("shortcutBlocked", False) else 0.0,
+        1.0 if observation.get("detourNeeded", False) else 0.0,
     ]
 
 

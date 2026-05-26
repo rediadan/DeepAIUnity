@@ -11,7 +11,7 @@ namespace DeepAIArena
     [RequireComponent(typeof(DecisionRequester))]
     public class ArenaMlAgent : Agent
     {
-        private const int ObservationSize = 36;
+        private const int ObservationSize = 38;
         private const int MoveActionCount = 5;
         private const int ShoveActionCount = 2;
 
@@ -32,6 +32,11 @@ namespace DeepAIArena
 
         public void SetControlActive(bool active)
         {
+            controller ??= GetComponent<ArenaCharacterController>();
+            manager ??= FindAnyObjectByType<ArenaGameManager>();
+            DisableSiblingBaseAgents();
+            ConfigureMlAgentsComponents();
+
             controlActive = active;
             enabled = active;
             var requester = GetComponent<DecisionRequester>();
@@ -39,24 +44,33 @@ namespace DeepAIArena
             {
                 requester.enabled = active;
             }
+
+            if (active)
+            {
+                RequestDecision();
+            }
         }
 
         protected override void Awake()
         {
             controller = GetComponent<ArenaCharacterController>();
+            DisableSiblingBaseAgents();
             ConfigureMlAgentsComponents();
             base.Awake();
         }
 
         private void Start()
         {
+            DisableSiblingBaseAgents();
             manager ??= FindAnyObjectByType<ArenaGameManager>();
+            ConfigureMlAgentsComponents();
         }
 
         public override void Initialize()
         {
             controller ??= GetComponent<ArenaCharacterController>();
             manager ??= FindAnyObjectByType<ArenaGameManager>();
+            DisableSiblingBaseAgents();
             ConfigureMlAgentsComponents();
         }
 
@@ -102,6 +116,8 @@ namespace DeepAIArena
             AddObservation(sensor, observation.movingObstacleDelta);
             AddObservation(sensor, observation.movingObstacleVelocity);
             sensor.AddObservation(observation.movingObstacleAhead ? 1f : 0f);
+            sensor.AddObservation(observation.shortcutBlocked ? 1f : 0f);
+            sensor.AddObservation(observation.detourNeeded ? 1f : 0f);
         }
 
         public override void OnActionReceived(ActionBuffers actions)
@@ -157,9 +173,17 @@ namespace DeepAIArena
                 return;
             }
 
-            var snapshot = controller.GetCurrentActionSnapshot();
-            discreteActions[0] = ToDiscreteMoveAction(snapshot.moveAction);
-            discreteActions[1] = snapshot.shovePressed ? 1 : 0;
+            if (TryGetObservation(out var observation))
+            {
+                var target = GetHeuristicTarget(observation);
+                var delta = target - observation.selfPosition;
+                discreteActions[0] = ToDiscreteMoveAction(delta);
+                discreteActions[1] = observation.opponentDelta.sqrMagnitude <= 1.21f && observation.opponentHasItem ? 1 : 0;
+                return;
+            }
+
+            discreteActions[0] = 0;
+            discreteActions[1] = 0;
         }
 
         private void Update()
@@ -211,6 +235,8 @@ namespace DeepAIArena
 
         private void ConfigureMlAgentsComponents()
         {
+            DisableSiblingBaseAgents();
+
             var behavior = GetComponent<BehaviorParameters>();
             behavior.BehaviorName = "ArenaMlAgent";
             behavior.TeamId = controller != null && controller.Side == ArenaSide.Right ? 1 : 0;
@@ -223,6 +249,18 @@ namespace DeepAIArena
             requester.DecisionPeriod = Mathf.Max(1, decisionPeriod);
             requester.DecisionStep = 0;
             requester.TakeActionsBetweenDecisions = true;
+        }
+
+        private void DisableSiblingBaseAgents()
+        {
+            var agents = GetComponents<Agent>();
+            foreach (var agent in agents)
+            {
+                if (agent != null && agent != this && agent.GetType() == typeof(Agent))
+                {
+                    agent.enabled = false;
+                }
+            }
         }
 
         private static void AddObservation(VectorSensor sensor, Vector2 value)
@@ -241,6 +279,39 @@ namespace DeepAIArena
                 4 => Vector2.right,
                 _ => Vector2.zero
             };
+        }
+
+        private static Vector2 GetHeuristicTarget(ArenaObservationSnapshot observation)
+        {
+            if (!observation.doorOpen
+                && !observation.switchActive
+                && observation.shortcutBlocked
+                && observation.switchDelta.sqrMagnitude <= 36f)
+            {
+                return observation.selfPosition + observation.switchDelta;
+            }
+
+            if (observation.selfHasItem)
+            {
+                return observation.basePosition;
+            }
+
+            return observation.opponentHasItem ? observation.opponentPosition : observation.itemPosition;
+        }
+
+        private static int ToDiscreteMoveAction(Vector2 direction)
+        {
+            if (direction.sqrMagnitude < 0.08f)
+            {
+                return 0;
+            }
+
+            if (Mathf.Abs(direction.x) > Mathf.Abs(direction.y))
+            {
+                return direction.x < 0f ? 3 : 4;
+            }
+
+            return direction.y < 0f ? 2 : 1;
         }
 
         private static int ToDiscreteMoveAction(ArenaMoveAction action)

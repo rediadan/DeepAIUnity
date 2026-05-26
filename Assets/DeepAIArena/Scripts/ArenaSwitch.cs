@@ -87,10 +87,27 @@ namespace DeepAIArena
                 return;
             }
 
-            linkedDoor?.RequestOpen(doorOpenSeconds);
+            var notifiedDoor = false;
             if (!wasActive)
             {
-                manager?.ReportSwitchActivated(this);
+                foreach (var actor in actorsOnSwitch)
+                {
+                    if (actor != null)
+                    {
+                        if (!notifiedDoor)
+                        {
+                            linkedDoor?.RequestOpen(doorOpenSeconds, actor.Side);
+                            notifiedDoor = true;
+                        }
+
+                        manager?.ReportSwitchActivated(this, actor.Side);
+                    }
+                }
+            }
+
+            if (!notifiedDoor)
+            {
+                linkedDoor?.RequestOpen(doorOpenSeconds);
             }
 
             ApplyState();

@@ -1,11 +1,14 @@
 # Deep AI Arena Training
 
 This folder trains top-view arena agents from player logs.
+The project-level research direction is summarized in the root `README.md`.
+
+The current experiments focus on the neural-network side of DQN: comparing DQN model architectures, testing Behavior Cloning initialization, and using v2 causal tags to explain behavior in a switch-door and moving-obstacle arena.
 
 ## Current Input Features
 
-BC/DQN Python scripts keep the legacy 21-feature sequence input for existing ONNX compatibility.
-Unity ML-Agents uses the live 36-feature v2 observation from `ArenaMlAgent`.
+BC/DQN Python scripts use the legacy 21-feature sequence input by default for existing ONNX compatibility.
+With `--feature-version v2`, BC/DQN use the same 38-feature arena observation shape as `ArenaMlAgent`.
 
 - self position
 - opponent position
@@ -21,7 +24,7 @@ Unity ML-Agents uses the live 36-feature v2 observation from `ArenaMlAgent`.
 - wall ahead
 - round elapsed time
 
-With `--sequence-length 4`, the model input size is `21 * 4 = 84`.
+With `--sequence-length 4`, the default v1 model input size is `21 * 4 = 84`.
 
 Legacy ML-Agents observation size was 25:
 
@@ -31,12 +34,15 @@ Legacy ML-Agents observation size was 25:
 - distance to opponent
 - distance to current target
 
-Arena v2 observation size is 36:
+Arena v2 observation size is 38:
 
 - the 25 fields above
 - nearest door delta and open state
 - nearest switch delta and active state
 - nearest moving obstacle delta, velocity, and ahead flag
+- shortcut blocked and detour-needed flags
+
+With `--feature-version v2 --sequence-length 4`, the v2 BC/DQN model input size is `38 * 4 = 152`.
 
 ## BC Training
 
@@ -126,7 +132,7 @@ This creates:
 - `Training\experiments\dqn\...`
 - `Training\experiments\causal\...`
 
-ML-Agents v2 training uses the same behavior name with the 36-feature live observation:
+BC/DQN v2 preprocessing writes 152-wide sequence rows. ML-Agents v2 training uses the same behavior name with the 38-feature live observation:
 
 ```cmd
 mlagents-learn Training\mlagents\arena_rl_only_v2.yaml --run-id arena_rl_only_v2

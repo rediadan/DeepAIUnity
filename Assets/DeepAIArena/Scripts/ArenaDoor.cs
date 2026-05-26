@@ -15,6 +15,8 @@ namespace DeepAIArena
         private SpriteRenderer spriteRenderer;
         private float openUntil = -999f;
         private bool wasOpen;
+        private ArenaSide lastOpenedBy = ArenaSide.Left;
+        private bool hasOpeningActor;
 
         public bool IsOpen => Time.time < openUntil;
         public float HoldOpenSeconds => holdOpenSeconds;
@@ -27,7 +29,20 @@ namespace DeepAIArena
             ApplyState(forceNotify: false);
         }
 
+        public void RequestOpen(float duration, ArenaSide openedBy)
+        {
+            lastOpenedBy = openedBy;
+            hasOpeningActor = true;
+            OpenFor(duration);
+        }
+
         public void RequestOpen(float duration)
+        {
+            hasOpeningActor = false;
+            OpenFor(duration);
+        }
+
+        private void OpenFor(float duration)
         {
             openUntil = Mathf.Max(openUntil, Time.time + Mathf.Max(0.1f, duration));
             ApplyState(forceNotify: true);
@@ -37,6 +52,7 @@ namespace DeepAIArena
         {
             openUntil = -999f;
             wasOpen = false;
+            hasOpeningActor = false;
             ApplyState(forceNotify: false);
         }
 
@@ -68,7 +84,7 @@ namespace DeepAIArena
 
             if (forceNotify && open && !wasOpen)
             {
-                manager?.ReportDoorOpened(this);
+                manager?.ReportDoorOpened(this, hasOpeningActor ? lastOpenedBy : (ArenaSide?)null);
             }
 
             wasOpen = open;

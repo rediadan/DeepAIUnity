@@ -22,6 +22,14 @@ namespace DeepAIArena
     [RequireComponent(typeof(ArenaCharacterController))]
     public class ArenaGhostController : MonoBehaviour
     {
+        private const float LeftStartDividerX = -7.15f;
+        private const float RightStartDividerX = 7.15f;
+        private const float StartDividerBypassY = 1.55f;
+        private const float DoorDetourX = 1.15f;
+        private const float TopLaneY = 3.25f;
+        private const float BottomLaneY = -2.3f;
+        private const float CenterLaneY = 0f;
+
         [Header("Ghost Policy")]
         [Tooltip("Rule-Based keeps handcrafted logic. ONNX Inference runs BC. DQN Inference runs q-value policy.")]
         [SerializeField] private ArenaGhostPolicyMode policyMode = ArenaGhostPolicyMode.RuleBased;
@@ -120,6 +128,7 @@ namespace DeepAIArena
 
             var observation = manager.BuildObservation(controller.Side);
             var target = GetTargetPoint(observation, out var routeName);
+            target = ApplyMapWaypoints(observation, target, ref routeName);
             var delta = target - (Vector2)transform.position;
             var move = delta.sqrMagnitude > 0.08f ? delta.normalized : Vector2.zero;
             if (observation.movingObstacleAhead && move.sqrMagnitude > 0.0001f)
@@ -134,13 +143,10 @@ namespace DeepAIArena
 
         private Vector2 GetTargetPoint(ArenaObservationSnapshot observation, out string routeName)
         {
-            if (!observation.doorOpen
-                && !observation.switchActive
-                && observation.doorDelta.sqrMagnitude <= 9f
-                && observation.switchDelta.sqrMagnitude <= 25f)
+            if (ShouldOpenDoorBeforeShortcut(observation))
             {
                 routeName = "Switch";
-                return observation.selfPosition + observation.switchDelta;
+                return SelectSwitchPoint(observation);
             }
 
             if (controller.HasItem)
@@ -168,6 +174,76 @@ namespace DeepAIArena
 
             routeName = "Center";
             return preferIntercept ? opponentPosition : itemPosition;
+        }
+
+        private Vector2 ApplyMapWaypoints(ArenaObservationSnapshot observation, Vector2 target, ref string routeName)
+        {
+            var position = observation.selfPosition;
+            if (NeedsStartDividerBypass(position, target))
+            {
+                routeName = "StartBypass";
+                return new Vector2(position.x < 0f ? LeftStartDividerX - 0.75f : RightStartDividerX + 0.75f, StartDividerBypassY);
+            }
+
+            if (observation.detourNeeded && !observation.doorOpen)
+            {
+                routeName = "DoorDetour";
+                return SelectDoorDetourPoint(position, target);
+            }
+
+            if (routeName == "Top" && Mathf.Abs(position.y - TopLaneY) > 0.35f && Mathf.Abs(position.x) > DoorDetourX)
+            {
+                routeName = "TopLaneAlign";
+                return new Vector2(position.x, TopLaneY);
+            }
+
+            if ((routeName == "Bottom" || routeName == "Escape") && Mathf.Abs(position.y - BottomLaneY) > 0.35f && Mathf.Abs(position.x) > DoorDetourX)
+            {
+                routeName = "BottomLaneAlign";
+                return new Vector2(position.x, BottomLaneY);
+            }
+
+            return target;
+        }
+
+        private static bool ShouldOpenDoorBeforeShortcut(ArenaObservationSnapshot observation)
+        {
+            return !observation.doorOpen
+                && !observation.switchActive
+                && observation.shortcutBlocked
+                && observation.switchDelta.sqrMagnitude <= 36f;
+        }
+
+        private static Vector2 SelectSwitchPoint(ArenaObservationSnapshot observation)
+        {
+            return observation.selfPosition + observation.switchDelta;
+        }
+
+        private static bool NeedsStartDividerBypass(Vector2 position, Vector2 target)
+        {
+            if (position.x < LeftStartDividerX && target.x > LeftStartDividerX && Mathf.Abs(position.y) < 1.3f)
+            {
+                return true;
+            }
+
+            return position.x > RightStartDividerX && target.x < RightStartDividerX && Mathf.Abs(position.y) < 1.3f;
+        }
+
+        private static Vector2 SelectDoorDetourPoint(Vector2 position, Vector2 target)
+        {
+            var detourY = target.y >= CenterLaneY ? TopLaneY : BottomLaneY;
+            if (Mathf.Abs(position.x) < DoorDetourX)
+            {
+                detourY = position.y >= CenterLaneY ? TopLaneY : BottomLaneY;
+            }
+
+            var detourX = position.x < 0f ? -DoorDetourX : DoorDetourX;
+            if (Mathf.Abs(position.y - detourY) > 0.45f)
+            {
+                return new Vector2(position.x, detourY);
+            }
+
+            return new Vector2(detourX, detourY);
         }
 
         private static Vector2 ChooseObstacleAvoidanceMove(Vector2 move)

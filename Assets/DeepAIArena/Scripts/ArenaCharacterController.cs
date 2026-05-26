@@ -277,7 +277,8 @@ namespace DeepAIArena
         {
             carriedItem = item;
             item.AttachTo(this);
-            arenaGameManager?.ReportReward(ArenaRewardEventType.ItemCollected, Side, 1f, "item_pickup");
+            var reward = arenaGameManager != null ? arenaGameManager.ItemPickupReward : 2f;
+            arenaGameManager?.ReportReward(ArenaRewardEventType.ItemCollected, Side, reward, "item_pickup");
         }
 
         public void DropItem()
