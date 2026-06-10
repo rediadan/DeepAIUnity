@@ -124,6 +124,7 @@ def apply_target_highlight(
         "base": np.asarray([0.05, 1.0, 0.15], dtype=np.float32),
         "opponent": np.asarray([1.0, 0.15, 0.05], dtype=np.float32),
         "item": np.asarray([1.0, 0.95, 0.05], dtype=np.float32),
+        "switch": np.asarray([0.05, 0.95, 1.0], dtype=np.float32),
     }.get(target_type, np.asarray([1.0, 0.95, 0.05], dtype=np.float32))
 
     radius = max(1, int(radius_cells))

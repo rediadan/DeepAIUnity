@@ -420,7 +420,13 @@ namespace DeepAIArena
             WriteStatusMarker(rgb, selfHasItem, opponentHasItem);
             if (drawTargetHighlight)
             {
-                WriteTargetHighlight(rgb, observation.targetPosition, observation.targetType);
+                var highlightPosition = observation.guidanceUsesSwitch
+                    ? observation.guidanceTargetPosition
+                    : observation.targetPosition;
+                var highlightType = observation.guidanceUsesSwitch
+                    ? observation.guidanceTargetType
+                    : observation.targetType;
+                WriteTargetHighlight(rgb, highlightPosition, highlightType);
             }
 
             return rgb;
@@ -434,6 +440,7 @@ namespace DeepAIArena
             {
                 ArenaTargetType.Base => new Vector3(0.05f, 1f, 0.15f),
                 ArenaTargetType.Opponent => new Vector3(1f, 0.15f, 0.05f),
+                ArenaTargetType.Switch => new Vector3(0.05f, 0.95f, 1f),
                 _ => new Vector3(1f, 0.95f, 0.05f)
             };
 

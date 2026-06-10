@@ -132,6 +132,10 @@ class UnityArenaRasterizer:
             target_position = item_position
             target_type = "item"
 
+        if bool(observation.get("guidanceUsesSwitch", False)):
+            target_position = _vector2(observation.get("guidanceTargetPosition"), tuple(target_position.tolist()))
+            target_type = "switch"
+
         return apply_target_highlight(
             semantic_channels_to_rgb(self.encode(observation)),
             target_position,

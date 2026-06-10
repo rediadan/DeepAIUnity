@@ -35,7 +35,8 @@ namespace DeepAIArena
     {
         Item = 0,
         Base = 1,
-        Opponent = 2
+        Opponent = 2,
+        Switch = 3
     }
 
     public enum ArenaDqnAction
@@ -84,6 +85,10 @@ namespace DeepAIArena
         public float distanceToTarget;
         public Vector2 targetPosition;
         public ArenaTargetType targetType;
+        public Vector2 guidanceTargetPosition;
+        public ArenaTargetType guidanceTargetType;
+        public bool guidanceUsesSwitch;
+        public float guidanceRouteBenefit;
         public bool wallAhead;
         public float roundElapsedTime;
         public Vector2 doorDelta;
@@ -256,6 +261,9 @@ namespace DeepAIArena
         [SerializeField] private float pathFlowDirectionPenalty = -0.004f;
         [SerializeField] private bool pathTreatClosedDoorsAsBlocked = true;
         [SerializeField] private bool pathTreatMovingObstaclesAsBlocked;
+        [SerializeField] private bool useDoorAwareSwitchSubgoals = true;
+        [SerializeField, Min(0f)] private float switchSubgoalMinBenefitCells = 2f;
+        [SerializeField] private float switchSubgoalActivationReward = 0.35f;
         [SerializeField] private float mlDoorOpenReward = 0.3f;
         [SerializeField] private float openDoorSwitchPenalty = -0.15f;
         [SerializeField] private float mlClosedDoorActionPenalty = -0.015f;
@@ -866,6 +874,20 @@ namespace DeepAIArena
             var selfPosition = (Vector2)self.transform.position;
             var itemPosition = (Vector2)item.transform.position;
             var opponentPosition = (Vector2)opponent.transform.position;
+            var guidanceTargetType = targetType;
+            var guidanceTargetPosition = targetPosition;
+            var guidanceUsesSwitch = TryResolveSwitchSubgoal(
+                selfPosition,
+                targetPosition,
+                targetType,
+                out var switchTargetPosition,
+                out var switchRouteBenefit);
+            if (guidanceUsesSwitch)
+            {
+                guidanceTargetType = ArenaTargetType.Switch;
+                guidanceTargetPosition = switchTargetPosition;
+            }
+
             var itemDelta = itemPosition - selfPosition;
             var baseDelta = basePosition - selfPosition;
             var opponentDelta = opponentPosition - selfPosition;
@@ -900,6 +922,10 @@ namespace DeepAIArena
                 distanceToTarget = Vector2.Distance(selfPosition, targetPosition),
                 targetPosition = targetPosition,
                 targetType = targetType,
+                guidanceTargetPosition = guidanceTargetPosition,
+                guidanceTargetType = guidanceTargetType,
+                guidanceUsesSwitch = guidanceUsesSwitch,
+                guidanceRouteBenefit = switchRouteBenefit,
                 wallAhead = self.IsWallAhead(),
                 roundElapsedTime = Time.time - roundStartTime,
                 doorDelta = doorPosition - selfPosition,
@@ -1420,6 +1446,11 @@ namespace DeepAIArena
                 && previousAction.moveAction != ArenaMoveAction.Idle
                 ? mlMovingObstacleActionPenalty
                 : 0f;
+            var switchSubgoalReward = previousObservation.guidanceUsesSwitch
+                && !currentObservation.guidanceUsesSwitch
+                && currentObservation.doorOpen
+                ? switchSubgoalActivationReward
+                : 0f;
 
             return dqnStepPenalty
                 + progressReward
@@ -1427,16 +1458,18 @@ namespace DeepAIArena
                 + wallPenalty
                 + invalidShovePenalty
                 + closedDoorPenalty
-                + movingObstaclePenalty;
+                + movingObstaclePenalty
+                + switchSubgoalReward;
         }
 
         private float ComputeEuclideanProgressReward(
             ArenaObservationSnapshot previousObservation,
             ArenaObservationSnapshot currentObservation)
         {
-            var previousDistance = Vector2.Distance(previousObservation.selfPosition, previousObservation.targetPosition);
-            var currentDistance = Vector2.Distance(currentObservation.selfPosition, currentObservation.targetPosition);
-            var progressScale = ResolveProgressRewardScale(previousObservation.targetType);
+            var targetPosition = ResolveRewardGuidanceTargetPosition(previousObservation);
+            var previousDistance = Vector2.Distance(previousObservation.selfPosition, targetPosition);
+            var currentDistance = Vector2.Distance(currentObservation.selfPosition, targetPosition);
+            var progressScale = ResolveProgressRewardScale(ResolveRewardGuidanceTargetType(previousObservation));
             return Mathf.Clamp(
                 (previousDistance - currentDistance) * progressScale,
                 -dqnProgressRewardClamp,
@@ -1457,7 +1490,8 @@ namespace DeepAIArena
                 return false;
             }
 
-            if (!TryBuildPathDistanceField(previousObservation.targetPosition, out var distances, out var blocked))
+            var targetPosition = ResolveRewardGuidanceTargetPosition(previousObservation);
+            if (!TryBuildPathDistanceField(targetPosition, out var distances, out var blocked))
             {
                 return false;
             }
@@ -1531,7 +1565,114 @@ namespace DeepAIArena
             return 0f;
         }
 
+        private bool TryResolveSwitchSubgoal(
+            Vector2 selfPosition,
+            Vector2 targetPosition,
+            ArenaTargetType targetType,
+            out Vector2 switchTargetPosition,
+            out float switchRouteBenefit)
+        {
+            switchTargetPosition = targetPosition;
+            switchRouteBenefit = 0f;
+            if (!useDoorAwareSwitchSubgoals
+                || targetType == ArenaTargetType.Opponent
+                || arenaSwitches == null
+                || arenaSwitches.Length == 0)
+            {
+                return false;
+            }
+
+            if (!TryBuildPathDistanceField(targetPosition, out var directDistances, out _))
+            {
+                return false;
+            }
+
+            var directCost = GetPathCost(selfPosition, directDistances);
+            var bestRouteCost = directCost;
+            var bestSwitchPosition = targetPosition;
+            var bestBenefit = 0f;
+            foreach (var arenaSwitch in arenaSwitches)
+            {
+                if (arenaSwitch == null || arenaSwitch.LinkedDoor == null || arenaSwitch.LinkedDoor.IsOpen)
+                {
+                    continue;
+                }
+
+                var switchPosition = (Vector2)arenaSwitch.transform.position;
+                if (!TryBuildPathDistanceField(switchPosition, out var switchDistances, out _))
+                {
+                    continue;
+                }
+
+                var costToSwitch = GetPathCost(selfPosition, switchDistances);
+                if (float.IsInfinity(costToSwitch))
+                {
+                    continue;
+                }
+
+                if (!TryBuildPathDistanceField(targetPosition, arenaSwitch.LinkedDoor, out var openedDoorDistances, out _))
+                {
+                    continue;
+                }
+
+                var costFromSwitchToTarget = GetPathCost(switchPosition, openedDoorDistances);
+                if (float.IsInfinity(costFromSwitchToTarget))
+                {
+                    continue;
+                }
+
+                var switchRouteCost = costToSwitch + costFromSwitchToTarget;
+                var routeBenefit = float.IsInfinity(directCost)
+                    ? switchSubgoalMinBenefitCells + 1f
+                    : directCost - switchRouteCost;
+                if (switchRouteCost < bestRouteCost && routeBenefit > bestBenefit)
+                {
+                    bestRouteCost = switchRouteCost;
+                    bestSwitchPosition = switchPosition;
+                    bestBenefit = routeBenefit;
+                }
+            }
+
+            if (bestBenefit < Mathf.Max(0f, switchSubgoalMinBenefitCells))
+            {
+                return false;
+            }
+
+            switchTargetPosition = bestSwitchPosition;
+            switchRouteBenefit = bestBenefit;
+            return true;
+        }
+
+        private float GetPathCost(Vector2 position, int[] distances)
+        {
+            var index = FindNearestReachablePathIndex(WorldToPathCell(position), distances);
+            return index >= 0 ? distances[index] : float.PositiveInfinity;
+        }
+
+        private Vector2 ResolveRewardGuidanceTargetPosition(ArenaObservationSnapshot observation)
+        {
+            return observation.guidanceUsesSwitch
+                ? observation.guidanceTargetPosition
+                : observation.targetPosition;
+        }
+
+        private ArenaTargetType ResolveRewardGuidanceTargetType(ArenaObservationSnapshot observation)
+        {
+            return observation.guidanceUsesSwitch
+                ? observation.guidanceTargetType
+                : observation.targetType;
+        }
+
         private bool TryBuildPathDistanceField(Vector2 targetPosition, out int[] distances, out bool[] blocked)
+        {
+            return TryBuildPathDistanceField(targetPosition, null, out distances, out blocked);
+        }
+
+        private bool TryBuildPathDistanceField(
+            Vector2 targetPosition,
+            ArenaDoor doorToTreatAsOpen,
+            out int[] distances,
+            out bool[] blocked)
         {
             var cellCount = PathGridWidth * PathGridHeight;
             distances = new int[cellCount];
@@ -1541,7 +1682,7 @@ namespace DeepAIArena
                 distances[i] = -1;
             }
 
-            BuildPathBlockedCells(blocked);
+            BuildPathBlockedCells(blocked, doorToTreatAsOpen);
             var targetIndex = FindNearestWalkablePathIndex(WorldToPathCell(targetPosition), blocked);
             if (targetIndex < 0)
             {
@@ -1591,12 +1732,12 @@ namespace DeepAIArena
             queue[tail++] = index;
         }
 
-        private void BuildPathBlockedCells(bool[] blocked)
+        private void BuildPathBlockedCells(bool[] blocked, ArenaDoor doorToTreatAsOpen)
         {
             var root = transform.parent != null ? transform.parent : transform;
             foreach (var collider in root.GetComponentsInChildren<BoxCollider2D>(includeInactive: true))
             {
-                if (ShouldIgnorePathCollider(collider))
+                if (ShouldIgnorePathCollider(collider, doorToTreatAsOpen))
                 {
                     continue;
                 }
@@ -1605,7 +1746,7 @@ namespace DeepAIArena
             }
         }
 
-        private bool ShouldIgnorePathCollider(BoxCollider2D collider)
+        private bool ShouldIgnorePathCollider(BoxCollider2D collider, ArenaDoor doorToTreatAsOpen)
         {
             if (collider == null || collider.isTrigger)
             {
@@ -1623,6 +1764,11 @@ namespace DeepAIArena
             var door = collider.GetComponentInParent<ArenaDoor>();
             if (door != null)
             {
+                if (door == doorToTreatAsOpen)
+                {
+                    return true;
+                }
+
                 return !pathTreatClosedDoorsAsBlocked || door.IsOpen;
             }
 

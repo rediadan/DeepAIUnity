@@ -82,6 +82,8 @@ def build_live_config(args: argparse.Namespace, payload: dict[str, Any]) -> tupl
 
 
 class LiveDqnTrainer:
+    ACTION_NAMES = ("Idle", "Up", "Down", "Left", "Right", "Shove")
+
     def __init__(
         self,
         env_config: ArenaRasterConfig,
@@ -90,6 +92,7 @@ class LiveDqnTrainer:
         init_checkpoint: str | None,
         save_interval_seconds: float,
         metrics_interval_steps: int,
+        console_log_interval_steps: int,
         expert_bc_weight: float,
         expert_pretrain_steps: int,
         expert_pretrain_batch_size: int,
@@ -152,10 +155,14 @@ class LiveDqnTrainer:
         self.recent_episode_rewards = deque(maxlen=100)
         self.recent_losses = deque(maxlen=100)
         self.recent_expert_action_losses = deque(maxlen=100)
+        self.best_episode_reward: float | None = None
         self.save_interval_seconds = float(save_interval_seconds)
         self.metrics_interval_steps = max(1, int(metrics_interval_steps))
+        self.console_log_interval_steps = max(0, int(console_log_interval_steps))
         self.last_save_time = time.monotonic()
         self.last_metrics_step = -1
+        self.last_console_log_step = 0
+        self.last_console_action_counts: Counter[int] = Counter()
 
         self.output_dir = Path(config.output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -207,7 +214,13 @@ class LiveDqnTrainer:
 
         if done:
             self.episode_count += 1
-            self.recent_episode_rewards.append(self.agent_episode_rewards[agent_id])
+            episode_reward = self.agent_episode_rewards[agent_id]
+            self.recent_episode_rewards.append(episode_reward)
+            self.best_episode_reward = (
+                episode_reward
+                if self.best_episode_reward is None
+                else max(self.best_episode_reward, episode_reward)
+            )
             self.agent_episode_rewards[agent_id] = 0.0
 
         loss = self.train_if_ready()
@@ -225,6 +238,8 @@ class LiveDqnTrainer:
         if self.global_step - self.last_metrics_step >= self.metrics_interval_steps:
             self.write_metrics(connection_status)
             self.last_metrics_step = self.global_step
+
+        self.maybe_write_console_summary(connection_status)
 
     def handle_act(self, payload: dict[str, Any]) -> dict[str, Any]:
         state = self.reshape_state(payload["state"])
@@ -330,6 +345,61 @@ class LiveDqnTrainer:
         )
         print(f"Saved checkpoint to {self.checkpoint_path}", flush=True)
 
+    def format_action_distribution(self, counts: Counter[int]) -> str:
+        total = sum(counts.values())
+        if total <= 0:
+            return "none"
+
+        parts: list[str] = []
+        for action in range(self.env_config.action_count):
+            label = self.ACTION_NAMES[action] if action < len(self.ACTION_NAMES) else f"A{action}"
+            ratio = counts.get(action, 0) / total * 100.0
+            parts.append(f"{label}:{ratio:.1f}%")
+        return " ".join(parts)
+
+    def maybe_write_console_summary(self, connection_status: str) -> None:
+        if self.console_log_interval_steps <= 0:
+            return
+        if self.global_step - self.last_console_log_step < self.console_log_interval_steps:
+            return
+
+        recent_rewards = list(self.recent_episode_rewards)
+        mean_reward_100 = float(np.mean(recent_rewards)) if recent_rewards else 0.0
+        max_reward_100 = float(max(recent_rewards)) if recent_rewards else 0.0
+        best_reward = self.best_episode_reward if self.best_episode_reward is not None else 0.0
+        running_reward = float(sum(self.agent_episode_rewards.values()))
+        loss = float(np.mean(self.recent_losses)) if self.recent_losses else 0.0
+        expert_action_loss = (
+            float(np.mean(self.recent_expert_action_losses))
+            if self.recent_expert_action_losses
+            else 0.0
+        )
+
+        recent_action_counts: Counter[int] = Counter()
+        for action in range(self.env_config.action_count):
+            delta = self.action_counts[action] - self.last_console_action_counts[action]
+            if delta > 0:
+                recent_action_counts[action] = delta
+
+        print(
+            "[LiveDQN] "
+            f"step={self.global_step} "
+            f"episodes={self.episode_count} "
+            f"replay={len(self.replay)} "
+            f"eps={self.epsilon_schedule.value(self.global_step):.4f} "
+            f"loss={loss:.5f} "
+            f"reward100_mean={mean_reward_100:.3f} "
+            f"reward100_max={max_reward_100:.3f} "
+            f"best_reward={best_reward:.3f} "
+            f"running_reward={running_reward:.3f} "
+            f"expert_loss={expert_action_loss:.5f} "
+            f"status={connection_status} "
+            f"actions_recent={self.format_action_distribution(recent_action_counts)}",
+            flush=True,
+        )
+        self.last_console_log_step = self.global_step
+        self.last_console_action_counts = Counter(self.action_counts)
+
     def write_metrics(self, connection_status: str) -> None:
         row = {
             "global_step": self.global_step,
@@ -363,6 +433,7 @@ def serve_forever(args: argparse.Namespace) -> None:
         init_checkpoint=args.init_checkpoint,
         save_interval_seconds=args.save_interval_seconds,
         metrics_interval_steps=args.metrics_interval_steps,
+        console_log_interval_steps=args.console_log_interval_steps,
         expert_bc_weight=args.expert_bc_weight,
         expert_pretrain_steps=args.expert_pretrain_steps,
         expert_pretrain_batch_size=args.expert_pretrain_batch_size,
@@ -429,6 +500,12 @@ def main() -> None:
     parser.add_argument("--epsilon-decay-steps", type=int)
     parser.add_argument("--save-interval-seconds", type=float, default=300.0)
     parser.add_argument("--metrics-interval-steps", type=int, default=100)
+    parser.add_argument(
+        "--console-log-interval-steps",
+        type=int,
+        default=1000,
+        help="Print a live training summary every N observed transitions. Set 0 to disable.",
+    )
     parser.add_argument("--seed", type=int)
     parser.add_argument("--cpu", action="store_true")
     args = parser.parse_args()
