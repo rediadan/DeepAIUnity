@@ -31,14 +31,24 @@ namespace DeepAIArena
 
         public void RequestOpen(float duration, ArenaSide openedBy)
         {
-            lastOpenedBy = openedBy;
-            hasOpeningActor = true;
+            if (!IsOpen)
+            {
+                lastOpenedBy = openedBy;
+                hasOpeningActor = true;
+                wasOpen = false;
+            }
+
             OpenFor(duration);
         }
 
         public void RequestOpen(float duration)
         {
             hasOpeningActor = false;
+            if (!IsOpen)
+            {
+                wasOpen = false;
+            }
+
             OpenFor(duration);
         }
 

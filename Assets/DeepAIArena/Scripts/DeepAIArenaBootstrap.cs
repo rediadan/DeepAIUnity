@@ -5,6 +5,9 @@ namespace DeepAIArena
     public class DeepAIArenaBootstrap : MonoBehaviour
     {
         [SerializeField] private bool buildOnPlay = true;
+        [SerializeField] private bool overrideActorModesOnPlay;
+        [SerializeField] private ArenaActorControlMode leftActorModeOnPlay = ArenaActorControlMode.RuleBased;
+        [SerializeField] private ArenaActorControlMode rightActorModeOnPlay = ArenaActorControlMode.MlAgents;
 
         private void Awake()
         {
@@ -19,6 +22,7 @@ namespace DeepAIArena
                 var arenaRoot = manager.transform.parent != null ? manager.transform.parent : transform;
                 ArenaBuilder.EnsureV2Environment(arenaRoot);
                 manager.RefreshEnvironmentReferences();
+                ApplyActorModeOverride(manager);
                 return;
             }
 
@@ -28,6 +32,17 @@ namespace DeepAIArena
             }
 
             ArenaBuilder.Build(transform);
+            ApplyActorModeOverride(FindAnyObjectByType<ArenaGameManager>());
+        }
+
+        private void ApplyActorModeOverride(ArenaGameManager manager)
+        {
+            if (!overrideActorModesOnPlay || manager == null)
+            {
+                return;
+            }
+
+            manager.SetActorControlModes(leftActorModeOnPlay, rightActorModeOnPlay);
         }
     }
 }

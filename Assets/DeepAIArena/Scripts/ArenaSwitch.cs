@@ -9,10 +9,12 @@ namespace DeepAIArena
     {
         [SerializeField] private ArenaDoor linkedDoor;
         [SerializeField] private float doorOpenSeconds = 2.5f;
+        [SerializeField] private float openDoorHoldPenaltyInterval = 0.5f;
         [SerializeField] private Color inactiveColor = new Color(0.2f, 0.48f, 0.85f, 1f);
         [SerializeField] private Color activeColor = new Color(0.45f, 1f, 0.66f, 1f);
 
         private readonly HashSet<ArenaCharacterController> actorsOnSwitch = new();
+        private readonly Dictionary<ArenaCharacterController, float> nextOpenDoorHoldPenaltyAt = new();
         private ArenaGameManager manager;
         private SpriteRenderer spriteRenderer;
         private bool wasActive;
@@ -40,6 +42,7 @@ namespace DeepAIArena
         public void ResetSwitch()
         {
             actorsOnSwitch.Clear();
+            nextOpenDoorHoldPenaltyAt.Clear();
             wasActive = false;
             ApplyState();
         }
@@ -56,8 +59,7 @@ namespace DeepAIArena
         {
             if (other.TryGetComponent(out ArenaCharacterController controller))
             {
-                actorsOnSwitch.Add(controller);
-                ActivateLinkedDoorIfNeeded();
+                TrackActorOnSwitch(controller);
             }
         }
 
@@ -65,8 +67,7 @@ namespace DeepAIArena
         {
             if (other.TryGetComponent(out ArenaCharacterController controller))
             {
-                actorsOnSwitch.Add(controller);
-                ActivateLinkedDoorIfNeeded();
+                TrackActorOnSwitch(controller);
             }
         }
 
@@ -75,8 +76,41 @@ namespace DeepAIArena
             if (other.TryGetComponent(out ArenaCharacterController controller))
             {
                 actorsOnSwitch.Remove(controller);
+                nextOpenDoorHoldPenaltyAt.Remove(controller);
                 ApplyState();
             }
+        }
+
+        private void TrackActorOnSwitch(ArenaCharacterController controller)
+        {
+            var switchWasAlreadyHeld = wasActive;
+            var linkedDoorWasOpen = linkedDoor != null && linkedDoor.IsOpen;
+
+            actorsOnSwitch.Add(controller);
+            ActivateLinkedDoorIfNeeded();
+
+            if (switchWasAlreadyHeld && linkedDoorWasOpen)
+            {
+                ReportOpenDoorHoldPenalty(controller);
+            }
+        }
+
+        private void ReportOpenDoorHoldPenalty(ArenaCharacterController controller)
+        {
+            if (controller == null || manager == null)
+            {
+                return;
+            }
+
+            var now = Time.time;
+            if (nextOpenDoorHoldPenaltyAt.TryGetValue(controller, out var nextPenaltyTime)
+                && now < nextPenaltyTime)
+            {
+                return;
+            }
+
+            nextOpenDoorHoldPenaltyAt[controller] = now + Mathf.Max(0.1f, openDoorHoldPenaltyInterval);
+            manager.ReportOpenDoorSwitchHeld(this, controller.Side);
         }
 
         private void ActivateLinkedDoorIfNeeded()
@@ -90,6 +124,7 @@ namespace DeepAIArena
             var notifiedDoor = false;
             if (!wasActive)
             {
+                var linkedDoorWasOpen = linkedDoor != null && linkedDoor.IsOpen;
                 foreach (var actor in actorsOnSwitch)
                 {
                     if (actor != null)
@@ -100,7 +135,7 @@ namespace DeepAIArena
                             notifiedDoor = true;
                         }
 
-                        manager?.ReportSwitchActivated(this, actor.Side);
+                        manager?.ReportSwitchActivated(this, actor.Side, linkedDoorWasOpen);
                     }
                 }
             }

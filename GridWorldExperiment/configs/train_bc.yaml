@@ -1,0 +1,20 @@
+seed: 42
+dataset_train: datasets/demonstrations/demo_train.npz
+dataset_val: datasets/demonstrations/demo_val.npz
+
+model:
+  input_channels: 10
+  grid_size: 24
+  action_count: 4
+  feature_dim: 256
+
+train:
+  batch_size: 128
+  epochs: 30
+  learning_rate: 0.0003
+  weight_decay: 0.00001
+
+output:
+  checkpoint_path: exports/bc_policy.pth
+  encoder_path: exports/bc_encoder.pth
+  metrics_path: runs/bc/metrics.csv

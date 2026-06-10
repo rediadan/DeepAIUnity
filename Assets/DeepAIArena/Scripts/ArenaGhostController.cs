@@ -6,7 +6,8 @@ namespace DeepAIArena
     {
         RuleBased,
         OnnxInference,
-        DqnInference
+        DqnInference,
+        RasterDqnInference
     }
 
     public enum ArenaGhostRuntimeMode
@@ -14,26 +15,31 @@ namespace DeepAIArena
         RuleBased,
         OnnxInference,
         DqnInference,
+        RasterDqnInference,
         OnnxFailed,
         DqnFailed,
+        RasterDqnFailed,
         OnnxFallback
     }
 
     [RequireComponent(typeof(ArenaCharacterController))]
     public class ArenaGhostController : MonoBehaviour
     {
-        private const float LeftStartDividerX = -7.15f;
-        private const float RightStartDividerX = 7.15f;
-        private const float StartDividerBypassY = 1.55f;
-        private const float DoorDetourX = 1.15f;
+        private const float LeftStartDividerX = -6.78f;
+        private const float RightStartDividerX = 6.78f;
+        private const float StartDividerLowerEdgeY = 0.87f;
+        private const float StartDividerUpperEdgeY = 3.47f;
+        private const float StartDividerBypassY = 0.2f;
+        private const float DoorDetourX = 1.9f;
         private const float TopLaneY = 3.25f;
         private const float BottomLaneY = -2.3f;
         private const float CenterLaneY = 0f;
 
         [Header("Ghost Policy")]
-        [Tooltip("Rule-Based keeps handcrafted logic. ONNX Inference runs BC. DQN Inference runs q-value policy.")]
+        [Tooltip("Rule-Based keeps handcrafted logic. ONNX/DQN Inference use vector features. Raster DQN Inference uses CNN raster input.")]
         [SerializeField] private ArenaGhostPolicyMode policyMode = ArenaGhostPolicyMode.RuleBased;
         [SerializeField] private ArenaGhostOnnxPolicy onnxPolicy;
+        [SerializeField] private ArenaRasterOnnxPolicy rasterOnnxPolicy;
         [SerializeField] private bool allowRuleFallbackOnInferenceFailure;
 
         private ArenaCharacterController controller;
@@ -62,6 +68,7 @@ namespace DeepAIArena
         {
             controller = GetComponent<ArenaCharacterController>();
             onnxPolicy ??= GetComponent<ArenaGhostOnnxPolicy>();
+            rasterOnnxPolicy ??= GetComponent<ArenaRasterOnnxPolicy>();
         }
 
         private void Update()
@@ -116,6 +123,29 @@ namespace DeepAIArena
                 {
                     RuntimeMode = ArenaGhostRuntimeMode.DqnFailed;
                     controller.SetGhostInput(Vector2.zero, false, "DqnFailed");
+                    return;
+                }
+
+                RuntimeMode = ArenaGhostRuntimeMode.OnnxFallback;
+            }
+            else if (policyMode == ArenaGhostPolicyMode.RasterDqnInference)
+            {
+                rasterOnnxPolicy ??= GetComponent<ArenaRasterOnnxPolicy>();
+                if (rasterOnnxPolicy != null
+                    && rasterOnnxPolicy.TryEvaluate(out var modelAction))
+                {
+                    RuntimeMode = ArenaGhostRuntimeMode.RasterDqnInference;
+                    controller.SetGhostInput(
+                        modelAction.move,
+                        modelAction.shove,
+                        modelAction.routeName);
+                    return;
+                }
+
+                if (!allowRuleFallbackOnInferenceFailure)
+                {
+                    RuntimeMode = ArenaGhostRuntimeMode.RasterDqnFailed;
+                    controller.SetGhostInput(Vector2.zero, false, "RasterDqnFailed");
                     return;
                 }
 
@@ -221,12 +251,18 @@ namespace DeepAIArena
 
         private static bool NeedsStartDividerBypass(Vector2 position, Vector2 target)
         {
-            if (position.x < LeftStartDividerX && target.x > LeftStartDividerX && Mathf.Abs(position.y) < 1.3f)
+            if (position.x < LeftStartDividerX
+                && target.x > LeftStartDividerX
+                && position.y > StartDividerLowerEdgeY
+                && position.y < StartDividerUpperEdgeY)
             {
                 return true;
             }
 
-            return position.x > RightStartDividerX && target.x < RightStartDividerX && Mathf.Abs(position.y) < 1.3f;
+            return position.x > RightStartDividerX
+                && target.x < RightStartDividerX
+                && position.y > StartDividerLowerEdgeY
+                && position.y < StartDividerUpperEdgeY;
         }
 
         private static Vector2 SelectDoorDetourPoint(Vector2 position, Vector2 target)

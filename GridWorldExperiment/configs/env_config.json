@@ -1,0 +1,52 @@
+{
+  "env_version": "continuous_raster_escape_v1",
+  "world_size": 12.0,
+  "grid_size": 24,
+  "move_step": 0.25,
+  "player_radius": 0.2,
+  "coin_radius": 0.22,
+  "enemy_radius": 0.24,
+  "trap_radius": 0.28,
+  "enemy_speed": 0.16,
+  "channels": [
+    "player",
+    "coin",
+    "enemy",
+    "wall",
+    "trap",
+    "visited",
+    "danger",
+    "enemy_previous",
+    "enemy_predicted",
+    "target_coin"
+  ],
+  "actions": [
+    "up",
+    "down",
+    "left",
+    "right"
+  ],
+  "max_steps": 240,
+  "target_score": 5,
+  "coin_count": {
+    "min": 3,
+    "max": 6
+  },
+  "enemy_count": {
+    "min": 1,
+    "max": 3
+  },
+  "wall_density": 0.12,
+  "trap_density": 0.04,
+  "danger_radius": 3,
+  "moving_enemies": true,
+  "reward": {
+    "coin": 1.0,
+    "death": -1.0,
+    "trap": -0.5,
+    "wall_hit": -0.1,
+    "step": -0.01,
+    "clear_bonus": 2.0
+  },
+  "random_seed": 42
+}

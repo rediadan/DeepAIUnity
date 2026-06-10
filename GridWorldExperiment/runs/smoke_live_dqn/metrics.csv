@@ -1,0 +1,3 @@
+global_step,episode_count,replay_size,epsilon,loss,mean_reward_100,action_counts,connection_status
+1,0,1,0.9999841666666667,0.0,0.0,"{""3"": 1}",connected
+2,1,2,0.9999683333333333,0.011664166115224361,0.2,"{""3"": 2}",connected

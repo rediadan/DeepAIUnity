@@ -29,6 +29,9 @@ namespace DeepAIArena
             var managerObject = new GameObject("ArenaGameManager");
             managerObject.transform.SetParent(root.transform, false);
             var manager = managerObject.AddComponent<ArenaGameManager>();
+            managerObject.AddComponent<ArenaRasterEncoder>();
+            var liveDqnClient = managerObject.AddComponent<ArenaLiveDqnTrainingClient>();
+            liveDqnClient.enabled = false;
 
             BuildSharedBaseArena(root.transform);
 
@@ -71,18 +74,18 @@ namespace DeepAIArena
             CreateObstacle(parent, new Vector2(-10.15f, 0f), new Vector2(0.35f, 10.7f), wallColor, "LeftWall");
             CreateObstacle(parent, new Vector2(10.15f, 0f), new Vector2(0.35f, 10.7f), wallColor, "RightWall");
 
-            CreateObstacle(parent, new Vector2(-4.8f, 2.25f), new Vector2(3.2f, 0.42f), blockColor, "TopLeftGate");
-            CreateObstacle(parent, new Vector2(4.8f, 2.25f), new Vector2(3.2f, 0.42f), blockColor, "TopRightGate");
-            CreateObstacle(parent, new Vector2(-4.8f, -1.25f), new Vector2(3.2f, 0.42f), blockColor, "BottomLeftGate");
-            CreateObstacle(parent, new Vector2(4.8f, -1.25f), new Vector2(3.2f, 0.42f), blockColor, "BottomRightGate");
+            // Fixed DQNScene layout. Keep these coordinates in sync with the saved ArenaRoot scene objects.
+            CreateObstacle(parent, new Vector2(-4.26f, 0.65f), new Vector2(5.56f, 0.42f), blockColor, "TopLeftGate");
+            CreateObstacle(parent, new Vector2(4.28f, 0.65f), new Vector2(5.44f, 0.42f), blockColor, "TopRightGate");
+            CreateObstacle(parent, new Vector2(-6.12f, -0.81f), new Vector2(3.2f, 0.42f), blockColor, "BottomLeftGate");
+            CreateObstacle(parent, new Vector2(6.08f, -0.81f), new Vector2(3.2f, 0.42f), blockColor, "BottomRightGate");
+            CreateObstacle(parent, new Vector2(-3.89f, -1.65f), new Vector2(3.2f, 0.42f), blockColor, "LowerLeftShelf");
+            CreateObstacle(parent, new Vector2(4.11f, -1.65f), new Vector2(3.2f, 0.42f), blockColor, "LowerRightShelf");
+            CreateObstacle(parent, new Vector2(-2.27f, -1.03f), new Vector2(1.2f, 0.42f), laneColor, "LowerCenterLeftBlock");
+            CreateObstacle(parent, new Vector2(2.36f, -1.03f), new Vector2(1.2f, 0.42f), laneColor, "LowerCenterRightBlock");
 
-            CreateObstacle(parent, new Vector2(-1.6f, 1.15f), new Vector2(0.45f, 1.45f), laneColor, "CenterLeftPillar");
-            CreateObstacle(parent, new Vector2(1.6f, 1.15f), new Vector2(0.45f, 1.45f), laneColor, "CenterRightPillar");
-            CreateObstacle(parent, new Vector2(-1.6f, -1.15f), new Vector2(0.45f, 1.2f), laneColor, "LowerLeftPillar");
-            CreateObstacle(parent, new Vector2(1.6f, -1.15f), new Vector2(0.45f, 1.2f), laneColor, "LowerRightPillar");
-
-            CreateObstacle(parent, new Vector2(-7.15f, 0f), new Vector2(0.5f, 2.6f), blockColor, "LeftStartDivider");
-            CreateObstacle(parent, new Vector2(7.15f, 0f), new Vector2(0.5f, 2.6f), blockColor, "RightStartDivider");
+            CreateObstacle(parent, new Vector2(-6.78f, 2.17f), new Vector2(0.5f, 2.6f), blockColor, "LeftStartDivider");
+            CreateObstacle(parent, new Vector2(6.78f, 2.17f), new Vector2(0.5f, 2.6f), blockColor, "RightStartDivider");
 
             BuildV2Complexity(parent);
         }
@@ -99,27 +102,29 @@ namespace DeepAIArena
 
         private static void BuildV2Complexity(Transform parent)
         {
-            var upperDoor = CreateDoor(parent, new Vector2(0f, 1.15f), new Vector2(0.55f, 1.35f), "UpperShortcutDoor");
-            var lowerDoor = CreateDoor(parent, new Vector2(0f, -1.15f), new Vector2(0.55f, 1.15f), "LowerShortcutDoor");
-            CreateSwitch(parent, new Vector2(-3.2f, 0.75f), new Vector2(0.8f, 0.45f), upperDoor, "UpperDoorSwitch");
-            CreateSwitch(parent, new Vector2(3.2f, -2.05f), new Vector2(0.8f, 0.45f), lowerDoor, "LowerDoorSwitch");
+            var upperDoor = CreateDoor(parent, new Vector2(0f, 0.75f), new Vector2(2.84625f, 0.43875f), "UpperShortcutDoor");
+            var lowerDoor = CreateDoor(parent, new Vector2(0f, -0.79f), new Vector2(2.84625f, 0.4f), "LowerShortcutDoor");
+            CreateSwitch(parent, new Vector2(-5.1f, 1.46f), new Vector2(0.8f, 0.45f), upperDoor, "UpperLeftDoorSwitch");
+            CreateSwitch(parent, new Vector2(5.15f, 1.46f), new Vector2(0.8f, 0.45f), upperDoor, "UpperRightDoorSwitch");
+            CreateSwitch(parent, new Vector2(-3.85f, -1.06f), new Vector2(0.8f, 0.45f), lowerDoor, "LowerLeftDoorSwitch");
+            CreateSwitch(parent, new Vector2(3.87f, -1.02f), new Vector2(0.8f, 0.45f), lowerDoor, "LowerRightDoorSwitch");
 
             CreateMovingObstacle(
                 parent,
-                new Vector2(-2.7f, 3.25f),
-                new Vector2(2.7f, 3.25f),
+                new Vector2(-6.71f, -0.08f),
+                new Vector2(-1.96f, -0.08f),
                 new Vector2(0.62f, 0.62f),
                 new Color(0.85f, 0.25f, 0.68f),
                 "TopMovingObstacle",
-                2.0f);
+                4.0f);
             CreateMovingObstacle(
                 parent,
-                new Vector2(2.7f, -2.3f),
-                new Vector2(-2.7f, -2.3f),
+                new Vector2(6.71f, -0.08f),
+                new Vector2(1.96f, -0.08f),
                 new Vector2(0.62f, 0.62f),
                 new Color(0.85f, 0.25f, 0.68f),
                 "BottomMovingObstacle",
-                1.75f);
+                4.0f);
         }
 
         private static void CreateObstacle(Transform parent, Vector2 position, Vector2 scale, Color color, string name)
@@ -292,8 +297,10 @@ namespace DeepAIArena
 
             var ghostController = actorObject.AddComponent<ArenaGhostController>();
             var onnxPolicy = actorObject.AddComponent<ArenaGhostOnnxPolicy>();
+            var rasterOnnxPolicy = actorObject.AddComponent<ArenaRasterOnnxPolicy>();
             ghostController.enabled = isGhost;
             onnxPolicy.enabled = isGhost;
+            rasterOnnxPolicy.enabled = false;
 
             return controller;
         }

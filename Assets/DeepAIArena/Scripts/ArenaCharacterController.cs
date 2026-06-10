@@ -273,10 +273,15 @@ namespace DeepAIArena
             }
         }
 
-        public void PickupItem(ArenaItem item)
+        public void PickupItem(ArenaItem item, bool reportReward = true)
         {
             carriedItem = item;
             item.AttachTo(this);
+            if (!reportReward)
+            {
+                return;
+            }
+
             var reward = arenaGameManager != null ? arenaGameManager.ItemPickupReward : 2f;
             arenaGameManager?.ReportReward(ArenaRewardEventType.ItemCollected, Side, reward, "item_pickup");
         }

@@ -1,0 +1,4 @@
+episode,global_step,epsilon,episode_return,moving_average_return,loss,eval_average_return,eval_success_rate,eval_average_coins,eval_death_rate,eval_wall_hit_count,eval_average_survival_steps,model_type,encoder_loaded,expert_replay
+1,300,0.99525,-2.5722487735748203,-2.5722487735748203,0.00022256613971655275,-24.487077617645348,0.0,0.0,0.0,234.0,300.0,cnn,False,True
+2,600,0.9905,-3.508483295440667,-3.040366034507744,0.0019510953623762361,-1.49999999999999,0.0,0.0,0.0,0.0,300.0,cnn,False,True
+3,900,0.98575,-2.786042690277091,-2.9555915864308595,0.0019880527712030018,-24.487077617645348,0.0,0.0,0.0,234.0,300.0,cnn,False,True

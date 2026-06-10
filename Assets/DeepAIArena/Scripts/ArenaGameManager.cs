@@ -27,7 +27,8 @@ namespace DeepAIArena
         ItemDelivered,
         ItemLost,
         FellOffMap,
-        RoundTimeout
+        RoundTimeout,
+        OpenDoorSwitchPressed
     }
 
     public enum ArenaTargetType
@@ -53,7 +54,16 @@ namespace DeepAIArena
         RuleBased,
         OnnxInference,
         DqnInference,
-        MlAgents
+        RasterDqnInference,
+        MlAgents,
+        LiveCnnDqnTraining
+    }
+
+    public enum ArenaItemSpawnMode
+    {
+        Fixed,
+        Cycle,
+        Random
     }
 
     [System.Serializable]
@@ -157,6 +167,8 @@ namespace DeepAIArena
         public int rightScore;
         public ArenaRoundActorStats left;
         public ArenaRoundActorStats right;
+        public string itemSpawnMode;
+        public int itemSpawnIndex;
         public int doorOpenCount;
         public int switchActivationCount;
     }
@@ -195,6 +207,16 @@ namespace DeepAIArena
         [SerializeField] private ArenaDoor[] arenaDoors;
         [SerializeField] private ArenaSwitch[] arenaSwitches;
         [SerializeField] private ArenaMovingObstacle[] movingObstacles;
+        [Header("Item Spawn Curriculum")]
+        [SerializeField] private ArenaItemSpawnMode itemSpawnMode = ArenaItemSpawnMode.Fixed;
+        [SerializeField] private int fixedItemSpawnIndex;
+        [Header("Return-To-Base Curriculum")]
+        [SerializeField] private bool enableReturnToBaseCurriculum;
+        [SerializeField, Range(0f, 1f)] private float returnToBaseCurriculumChance = 0.35f;
+        [SerializeField] private int returnToBaseCurriculumUntilRound;
+        [SerializeField] private bool alternateReturnToBaseHolder = true;
+        [SerializeField] private Vector2 returnToBaseLeftStart = new(-1.6f, -0.15f);
+        [SerializeField] private Vector2 returnToBaseRightStart = new(1.6f, -0.15f);
         [Header("Round Rules")]
         [SerializeField] private float roundDurationSeconds = 60f;
         [SerializeField] private float roundResetDelaySeconds = 1.25f;
@@ -206,16 +228,26 @@ namespace DeepAIArena
         [SerializeField] private string outputDirectoryName = "arena_training_rounds";
         [SerializeField] private string evaluationSummaryFileName = "arena_round_summary.jsonl";
         [SerializeField] private bool writeDqnTransitions = true;
+        [Tooltip("Minimum seconds between Step/CausalStep logs. Set 0 to log every frame.")]
+        [SerializeField, Min(0f)] private float stepLogIntervalSeconds = 0.1f;
+        [Tooltip("Minimum seconds between DqnTransition logs. Set 0 to log every frame.")]
+        [SerializeField, Min(0f)] private float dqnTransitionLogIntervalSeconds = 0.1f;
         [Header("Rewards")]
-        [SerializeField] private float itemPickupReward = 2f;
+        [SerializeField] private float itemPickupReward = 1f;
         [SerializeField] private float timeoutNoItemPenalty = -0.5f;
         [SerializeField] private float dqnStepPenalty = -0.01f;
         [SerializeField] private float dqnTargetProgressRewardScale = 0.05f;
-        [SerializeField] private float dqnWallActionPenalty = -0.02f;
-        [SerializeField] private float mlSwitchActivationReward = 0.2f;
+        [SerializeField] private float dqnItemTargetProgressRewardScale = 0.08f;
+        [SerializeField] private float dqnBaseTargetProgressRewardScale = 0.2f;
+        [SerializeField] private float dqnOpponentTargetProgressRewardScale = 0.05f;
+        [SerializeField] private float dqnProgressRewardClamp = 0.25f;
+        [SerializeField] private float dqnWallActionPenalty = -0.1f;
+        [SerializeField] private float dqnInvalidShovePenalty = -0.03f;
+        [SerializeField] private float dqnShoveOpportunityDistance = 0.95f;
         [SerializeField] private float mlDoorOpenReward = 0.3f;
+        [SerializeField] private float openDoorSwitchPenalty = -0.15f;
         [SerializeField] private float mlClosedDoorActionPenalty = -0.015f;
-        [SerializeField] private float mlMovingObstacleActionPenalty = -0.01f;
+        [SerializeField] private float mlMovingObstacleActionPenalty = -0.03f;
 
         private int leftScore;
         private int rightScore;
@@ -229,24 +261,35 @@ namespace DeepAIArena
         private float pendingRightDqnReward;
         private float pendingLeftMlAgentReward;
         private float pendingRightMlAgentReward;
+        private float pendingLeftLiveDqnReward;
+        private float pendingRightLiveDqnReward;
         private ArenaCausalStepResult pendingLeftCausalResult;
         private ArenaCausalStepResult pendingRightCausalResult;
         private ArenaRoundActorStats leftRoundStats;
         private ArenaRoundActorStats rightRoundStats;
         private int roundDoorOpenCount;
         private int roundSwitchActivationCount;
+        private int currentItemSpawnIndex = -1;
+        private int nextCycleItemSpawnIndex;
         private bool hasPreviousPlayerDqnStep;
         private ArenaObservationSnapshot previousPlayerObservation;
         private ArenaActionSnapshot previousPlayerAction;
+        private float nextLeftStepLogTime;
+        private float nextRightStepLogTime;
+        private float nextPlayerDqnTransitionLogTime;
 
         public ArenaCharacterController Player => player;
         public ArenaCharacterController Ghost => ghost;
         public ArenaItem Item => item;
         public float ItemPickupReward => itemPickupReward;
+        public ArenaActorControlMode LeftActorMode => leftActorMode;
+        public ArenaActorControlMode RightActorMode => rightActorMode;
         public ArenaDoor[] ArenaDoors => arenaDoors;
         public ArenaSwitch[] ArenaSwitches => arenaSwitches;
         public ArenaMovingObstacle[] MovingObstacles => movingObstacles;
         public Vector3[] ItemSpawnPoints => itemSpawnPoints;
+        public ArenaItemSpawnMode ItemSpawnMode => itemSpawnMode;
+        public int CurrentItemSpawnIndex => currentItemSpawnIndex;
         public ArenaSide LastScoringSide { get; private set; }
         public int RoundIndex => roundIndex;
         public float RoundElapsedTime => Time.time - roundStartTime;
@@ -302,6 +345,13 @@ namespace DeepAIArena
             ApplyActorControlModes();
 
             BeginRound();
+        }
+
+        public void SetActorControlModes(ArenaActorControlMode leftMode, ArenaActorControlMode rightMode)
+        {
+            leftActorMode = leftMode;
+            rightActorMode = rightMode;
+            ApplyActorControlModes();
         }
 
         private void EnsureReferences()
@@ -429,6 +479,23 @@ namespace DeepAIArena
         {
             ConfigureActorControl(player, leftActorMode);
             ConfigureActorControl(ghost, rightActorMode);
+            ConfigureLiveDqnTrainingClient();
+        }
+
+        private void ConfigureLiveDqnTrainingClient()
+        {
+            var useLiveDqn = leftActorMode == ArenaActorControlMode.LiveCnnDqnTraining
+                || rightActorMode == ArenaActorControlMode.LiveCnnDqnTraining;
+            var liveDqnClient = GetComponent<ArenaLiveDqnTrainingClient>();
+            if (useLiveDqn)
+            {
+                liveDqnClient ??= gameObject.AddComponent<ArenaLiveDqnTrainingClient>();
+                liveDqnClient.enabled = true;
+            }
+            else if (liveDqnClient != null)
+            {
+                liveDqnClient.enabled = false;
+            }
         }
 
         private void ConfigureActorControl(ArenaCharacterController actor, ArenaActorControlMode mode)
@@ -438,11 +505,12 @@ namespace DeepAIArena
                 return;
             }
 
-            var useAi = mode != ArenaActorControlMode.Human || actor.IsGhost;
+            var useAi = mode != ArenaActorControlMode.Human;
             actor.IsGhost = useAi;
 
             var ghostController = actor.GetComponent<ArenaGhostController>();
             var onnxPolicy = actor.GetComponent<ArenaGhostOnnxPolicy>();
+            var rasterOnnxPolicy = actor.GetComponent<ArenaRasterOnnxPolicy>();
             var mlAgent = actor.GetComponent<ArenaMlAgent>();
             if (!useAi)
             {
@@ -454,7 +522,13 @@ namespace DeepAIArena
 
                 if (onnxPolicy != null)
                 {
-                    onnxPolicy.enabled = true;
+                    onnxPolicy.enabled = false;
+                }
+
+                if (rasterOnnxPolicy != null)
+                {
+                    rasterOnnxPolicy.SetAutoStep(false);
+                    rasterOnnxPolicy.enabled = false;
                 }
 
                 if (mlAgent != null)
@@ -467,12 +541,47 @@ namespace DeepAIArena
             }
 
             ghostController ??= actor.gameObject.AddComponent<ArenaGhostController>();
+            if (mode == ArenaActorControlMode.LiveCnnDqnTraining)
+            {
+                ghostController.enabled = true;
+                ghostController.SetControlActive(false);
+                if (onnxPolicy != null)
+                {
+                    onnxPolicy.enabled = false;
+                }
+
+                if (rasterOnnxPolicy != null)
+                {
+                    rasterOnnxPolicy.SetAutoStep(false);
+                    rasterOnnxPolicy.enabled = false;
+                }
+
+                if (mlAgent != null)
+                {
+                    mlAgent.SetControlActive(false);
+                }
+
+                actor.DebugRouteName = "LiveCNN-DQN";
+                return;
+            }
+
             if (mode == ArenaActorControlMode.MlAgents)
             {
                 mlAgent ??= actor.gameObject.AddComponent<ArenaMlAgent>();
                 mlAgent.SetControlActive(true);
                 ghostController.enabled = true;
                 ghostController.SetControlActive(false);
+                if (onnxPolicy != null)
+                {
+                    onnxPolicy.enabled = false;
+                }
+
+                if (rasterOnnxPolicy != null)
+                {
+                    rasterOnnxPolicy.SetAutoStep(false);
+                    rasterOnnxPolicy.enabled = false;
+                }
+
                 actor.DebugRouteName = "MLAgents";
                 return;
             }
@@ -482,10 +591,30 @@ namespace DeepAIArena
                 mlAgent.SetControlActive(false);
             }
 
-            if (mode != ArenaActorControlMode.RuleBased)
+            var useVectorOnnxPolicy = mode == ArenaActorControlMode.OnnxInference
+                || mode == ArenaActorControlMode.DqnInference;
+            var useRasterOnnxPolicy = mode == ArenaActorControlMode.RasterDqnInference;
+
+            if (useVectorOnnxPolicy)
             {
                 onnxPolicy ??= actor.gameObject.AddComponent<ArenaGhostOnnxPolicy>();
                 onnxPolicy.enabled = true;
+            }
+            else if (onnxPolicy != null)
+            {
+                onnxPolicy.enabled = false;
+            }
+
+            if (useRasterOnnxPolicy)
+            {
+                rasterOnnxPolicy ??= actor.gameObject.AddComponent<ArenaRasterOnnxPolicy>();
+                rasterOnnxPolicy.enabled = true;
+                rasterOnnxPolicy.SetAutoStep(false);
+            }
+            else if (rasterOnnxPolicy != null)
+            {
+                rasterOnnxPolicy.SetAutoStep(false);
+                rasterOnnxPolicy.enabled = false;
             }
 
             ghostController.enabled = true;
@@ -499,6 +628,7 @@ namespace DeepAIArena
             {
                 ArenaActorControlMode.OnnxInference => ArenaGhostPolicyMode.OnnxInference,
                 ArenaActorControlMode.DqnInference => ArenaGhostPolicyMode.DqnInference,
+                ArenaActorControlMode.RasterDqnInference => ArenaGhostPolicyMode.RasterDqnInference,
                 _ => ArenaGhostPolicyMode.RuleBased
             };
         }
@@ -545,18 +675,97 @@ namespace DeepAIArena
             pendingRightDqnReward = 0f;
             pendingLeftMlAgentReward = 0f;
             pendingRightMlAgentReward = 0f;
+            pendingLeftLiveDqnReward = 0f;
+            pendingRightLiveDqnReward = 0f;
             pendingLeftCausalResult = default;
             pendingRightCausalResult = default;
             hasPreviousPlayerDqnStep = false;
+            ResetLogSamplingTimers();
             ResetRoundStats();
             ResetEnvironmentObjects();
             PrepareRoundLogFile();
 
             player.ResetActor(GetSpawnPoint(ArenaSide.Left));
             ghost.ResetActor(GetSpawnPoint(ArenaSide.Right));
-            item.ResetToSpawn(itemSpawnPoints[Random.Range(0, itemSpawnPoints.Length)]);
+            currentItemSpawnIndex = ResolveItemSpawnIndex();
+            item.ResetToSpawn(itemSpawnPoints[currentItemSpawnIndex]);
+            ApplyReturnToBaseCurriculumIfNeeded();
+            var rasterEncoder = GetComponent<ArenaRasterEncoder>();
+            if (rasterEncoder != null)
+            {
+                rasterEncoder.ResetFrameStack();
+            }
+
             ReportReward(ArenaRewardEventType.RoundStart, ArenaSide.Left, 0f, "round_start");
             ReportReward(ArenaRewardEventType.RoundStart, ArenaSide.Right, 0f, "round_start");
+        }
+
+        private void ApplyReturnToBaseCurriculumIfNeeded()
+        {
+            if (!ShouldUseReturnToBaseCurriculum())
+            {
+                return;
+            }
+
+            var holderSide = ResolveReturnToBaseHolderSide();
+            var holder = holderSide == ArenaSide.Left ? player : ghost;
+            if (holder == null || item == null)
+            {
+                return;
+            }
+
+            var start = holderSide == ArenaSide.Left ? returnToBaseLeftStart : returnToBaseRightStart;
+            holder.ResetActor(new Vector3(start.x, start.y, 0f));
+            item.ResetToSpawn(holder.transform.position);
+            holder.PickupItem(item, reportReward: false);
+        }
+
+        private bool ShouldUseReturnToBaseCurriculum()
+        {
+            if (!enableReturnToBaseCurriculum)
+            {
+                return false;
+            }
+
+            if (returnToBaseCurriculumUntilRound > 0 && roundIndex > returnToBaseCurriculumUntilRound)
+            {
+                return false;
+            }
+
+            return Random.value <= returnToBaseCurriculumChance;
+        }
+
+        private ArenaSide ResolveReturnToBaseHolderSide()
+        {
+            if (alternateReturnToBaseHolder)
+            {
+                return roundIndex % 2 == 0 ? ArenaSide.Right : ArenaSide.Left;
+            }
+
+            return Random.value < 0.5f ? ArenaSide.Left : ArenaSide.Right;
+        }
+
+        private int ResolveItemSpawnIndex()
+        {
+            if (itemSpawnPoints == null || itemSpawnPoints.Length == 0)
+            {
+                return 0;
+            }
+
+            switch (itemSpawnMode)
+            {
+                case ArenaItemSpawnMode.Cycle:
+                {
+                    var spawnIndex = Mathf.Clamp(nextCycleItemSpawnIndex, 0, itemSpawnPoints.Length - 1);
+                    nextCycleItemSpawnIndex = (spawnIndex + 1) % itemSpawnPoints.Length;
+                    return spawnIndex;
+                }
+                case ArenaItemSpawnMode.Random:
+                    return Random.Range(0, itemSpawnPoints.Length);
+                case ArenaItemSpawnMode.Fixed:
+                default:
+                    return Mathf.Clamp(fixedItemSpawnIndex, 0, itemSpawnPoints.Length - 1);
+            }
         }
 
         private void ResetEnvironmentObjects()
@@ -649,7 +858,7 @@ namespace DeepAIArena
             var baseDelta = basePosition - selfPosition;
             var opponentDelta = opponentPosition - selfPosition;
             var nearestDoor = FindNearestDoor(selfPosition);
-            var nearestSwitch = FindNearestSwitch(selfPosition);
+            var nearestSwitch = FindNearestSwitch(selfPosition, nearestDoor) ?? FindNearestSwitch(selfPosition);
             var nearestMovingObstacle = FindNearestMovingObstacle(selfPosition);
             var doorPosition = nearestDoor != null ? (Vector2)nearestDoor.transform.position : selfPosition;
             var switchPosition = nearestSwitch != null ? (Vector2)nearestSwitch.transform.position : selfPosition;
@@ -732,7 +941,7 @@ namespace DeepAIArena
             return nearest;
         }
 
-        private ArenaSwitch FindNearestSwitch(Vector2 position)
+        private ArenaSwitch FindNearestSwitch(Vector2 position, ArenaDoor linkedDoor = null)
         {
             ArenaSwitch nearest = null;
             var nearestDistance = float.MaxValue;
@@ -744,6 +953,11 @@ namespace DeepAIArena
             foreach (var arenaSwitch in arenaSwitches)
             {
                 if (arenaSwitch == null)
+                {
+                    continue;
+                }
+
+                if (linkedDoor != null && arenaSwitch.LinkedDoor != linkedDoor)
                 {
                     continue;
                 }
@@ -833,6 +1047,7 @@ namespace DeepAIArena
 
             AddPendingDqnReward(actorSide, rewardDelta);
             AddPendingMlAgentReward(actorSide, rewardDelta);
+            AddPendingLiveDqnReward(actorSide, rewardDelta);
 
             if (!writeLogsToFile)
             {
@@ -869,6 +1084,20 @@ namespace DeepAIArena
             return rightReward;
         }
 
+        public float ConsumeLiveDqnReward(ArenaSide side)
+        {
+            if (side == ArenaSide.Left)
+            {
+                var reward = pendingLeftLiveDqnReward;
+                pendingLeftLiveDqnReward = 0f;
+                return reward;
+            }
+
+            var rightReward = pendingRightLiveDqnReward;
+            pendingRightLiveDqnReward = 0f;
+            return rightReward;
+        }
+
         public void ReportDoorOpened(ArenaDoor arenaDoor, ArenaSide? openedBy)
         {
             if (arenaDoor == null || roundTransition)
@@ -886,9 +1115,10 @@ namespace DeepAIArena
             stats.doorOpenCount++;
             AddPendingMlAgentReward(openedBy.Value, mlDoorOpenReward);
             AddPendingDqnReward(openedBy.Value, mlDoorOpenReward);
+            AddPendingLiveDqnReward(openedBy.Value, mlDoorOpenReward);
         }
 
-        public void ReportSwitchActivated(ArenaSwitch arenaSwitch, ArenaSide activatedBy)
+        public void ReportSwitchActivated(ArenaSwitch arenaSwitch, ArenaSide activatedBy, bool linkedDoorWasAlreadyOpen)
         {
             if (arenaSwitch == null || roundTransition)
             {
@@ -898,8 +1128,29 @@ namespace DeepAIArena
             roundSwitchActivationCount++;
             ref var stats = ref GetMutableStats(activatedBy);
             stats.switchActivationCount++;
-            AddPendingMlAgentReward(activatedBy, mlSwitchActivationReward);
-            AddPendingDqnReward(activatedBy, mlSwitchActivationReward);
+
+            if (linkedDoorWasAlreadyOpen && openDoorSwitchPenalty < 0f)
+            {
+                ReportReward(
+                    ArenaRewardEventType.OpenDoorSwitchPressed,
+                    activatedBy,
+                    openDoorSwitchPenalty,
+                    "switch_pressed_while_door_open");
+            }
+        }
+
+        public void ReportOpenDoorSwitchHeld(ArenaSwitch arenaSwitch, ArenaSide activatedBy)
+        {
+            if (arenaSwitch == null || roundTransition || openDoorSwitchPenalty >= 0f)
+            {
+                return;
+            }
+
+            ReportReward(
+                ArenaRewardEventType.OpenDoorSwitchPressed,
+                activatedBy,
+                openDoorSwitchPenalty,
+                "switch_held_while_door_open");
         }
 
         public void ReportShoveAttempt(ArenaSide actorSide, bool succeeded, bool forcedItemDrop)
@@ -932,6 +1183,11 @@ namespace DeepAIArena
             ArenaActionSnapshot action)
         {
             if (!writeLogsToFile)
+            {
+                return;
+            }
+
+            if (!ShouldWriteStepLog(actorSide))
             {
                 return;
             }
@@ -976,9 +1232,14 @@ namespace DeepAIArena
 
             if (hasPreviousPlayerDqnStep)
             {
+                var done = roundTransition;
+                if (!done && !ShouldWriteDqnTransition())
+                {
+                    return;
+                }
+
                 var reward = ConsumePendingDqnReward(ArenaSide.Left)
                     + ComputeShapingReward(previousPlayerObservation, currentObservation, previousPlayerAction);
-                var done = roundTransition;
                 var transition = new ArenaDqnTransitionLog
                 {
                     transitionType = "DqnTransition",
@@ -1003,6 +1264,59 @@ namespace DeepAIArena
             }
 
             StorePreviousPlayerDqnStep(currentObservation, currentAction);
+        }
+
+        private void ResetLogSamplingTimers()
+        {
+            var elapsed = Time.time - roundStartTime;
+            nextLeftStepLogTime = elapsed;
+            nextRightStepLogTime = elapsed;
+            nextPlayerDqnTransitionLogTime = elapsed + Mathf.Max(0f, dqnTransitionLogIntervalSeconds);
+        }
+
+        private bool ShouldWriteStepLog(ArenaSide side)
+        {
+            var interval = Mathf.Max(0f, stepLogIntervalSeconds);
+            if (interval <= 0f)
+            {
+                return true;
+            }
+
+            var elapsed = Time.time - roundStartTime;
+            var nextTime = side == ArenaSide.Left ? nextLeftStepLogTime : nextRightStepLogTime;
+            if (elapsed + Mathf.Epsilon < nextTime)
+            {
+                return false;
+            }
+
+            if (side == ArenaSide.Left)
+            {
+                nextLeftStepLogTime = elapsed + interval;
+            }
+            else
+            {
+                nextRightStepLogTime = elapsed + interval;
+            }
+
+            return true;
+        }
+
+        private bool ShouldWriteDqnTransition()
+        {
+            var interval = Mathf.Max(0f, dqnTransitionLogIntervalSeconds);
+            if (interval <= 0f)
+            {
+                return true;
+            }
+
+            var elapsed = Time.time - roundStartTime;
+            if (elapsed + Mathf.Epsilon < nextPlayerDqnTransitionLogTime)
+            {
+                return false;
+            }
+
+            nextPlayerDqnTransitionLogTime = elapsed + interval;
+            return true;
         }
 
         private void StorePreviousPlayerDqnStep(ArenaObservationSnapshot observation, ArenaActionSnapshot action)
@@ -1035,6 +1349,17 @@ namespace DeepAIArena
             pendingRightMlAgentReward += rewardDelta;
         }
 
+        private void AddPendingLiveDqnReward(ArenaSide side, float rewardDelta)
+        {
+            if (side == ArenaSide.Left)
+            {
+                pendingLeftLiveDqnReward += rewardDelta;
+                return;
+            }
+
+            pendingRightLiveDqnReward += rewardDelta;
+        }
+
         private float ConsumePendingDqnReward(ArenaSide side)
         {
             if (side == ArenaSide.Left)
@@ -1056,13 +1381,18 @@ namespace DeepAIArena
         {
             var previousDistance = Vector2.Distance(previousObservation.selfPosition, previousObservation.targetPosition);
             var currentDistance = Vector2.Distance(currentObservation.selfPosition, currentObservation.targetPosition);
+            var progressScale = ResolveProgressRewardScale(previousObservation.targetType);
             var progressReward = Mathf.Clamp(
-                (previousDistance - currentDistance) * dqnTargetProgressRewardScale,
-                -0.1f,
-                0.1f);
+                (previousDistance - currentDistance) * progressScale,
+                -dqnProgressRewardClamp,
+                dqnProgressRewardClamp);
             var wallPenalty = previousObservation.wallAhead
                 && previousAction.moveAction != ArenaMoveAction.Idle
                 ? dqnWallActionPenalty
+                : 0f;
+            var invalidShovePenalty = previousAction.shovePressed
+                && !HasUsefulShoveTarget(previousObservation)
+                ? dqnInvalidShovePenalty
                 : 0f;
             var closedDoorPenalty = previousObservation.shortcutBlocked
                 && previousAction.moveAction != ArenaMoveAction.Idle
@@ -1073,7 +1403,71 @@ namespace DeepAIArena
                 ? mlMovingObstacleActionPenalty
                 : 0f;
 
-            return dqnStepPenalty + progressReward + wallPenalty + closedDoorPenalty + movingObstaclePenalty;
+            return dqnStepPenalty
+                + progressReward
+                + wallPenalty
+                + invalidShovePenalty
+                + closedDoorPenalty
+                + movingObstaclePenalty;
+        }
+
+        private float ResolveProgressRewardScale(ArenaTargetType targetType)
+        {
+            return targetType switch
+            {
+                ArenaTargetType.Base => dqnBaseTargetProgressRewardScale,
+                ArenaTargetType.Opponent => dqnOpponentTargetProgressRewardScale,
+                ArenaTargetType.Item => dqnItemTargetProgressRewardScale,
+                _ => dqnTargetProgressRewardScale
+            };
+        }
+
+        private bool HasUsefulShoveTarget(ArenaObservationSnapshot observation)
+        {
+            return observation.opponentHasItem
+                && observation.distanceToOpponent <= Mathf.Max(0.01f, dqnShoveOpportunityDistance);
+        }
+
+        public float ComputeSharedAgentShapingReward(
+            ArenaObservationSnapshot previousObservation,
+            ArenaObservationSnapshot currentObservation,
+            ArenaActionSnapshot previousAction)
+        {
+            return ComputeShapingReward(previousObservation, currentObservation, previousAction);
+        }
+
+        public float ComputeSharedAgentShapingReward(
+            ArenaObservationSnapshot previousObservation,
+            ArenaObservationSnapshot currentObservation,
+            ArenaDqnAction previousAction)
+        {
+            var actionSnapshot = new ArenaActionSnapshot
+            {
+                moveAction = ToMoveAction(previousAction),
+                shovePressed = previousAction == ArenaDqnAction.Shove,
+                routeName = "SharedAgent"
+            };
+            return ComputeShapingReward(previousObservation, currentObservation, actionSnapshot);
+        }
+
+        public float ComputeLiveDqnShapingReward(
+            ArenaObservationSnapshot previousObservation,
+            ArenaObservationSnapshot currentObservation,
+            ArenaDqnAction previousAction)
+        {
+            return ComputeSharedAgentShapingReward(previousObservation, currentObservation, previousAction);
+        }
+
+        private static ArenaMoveAction ToMoveAction(ArenaDqnAction action)
+        {
+            return action switch
+            {
+                ArenaDqnAction.MoveUp => ArenaMoveAction.MoveUp,
+                ArenaDqnAction.MoveDown => ArenaMoveAction.MoveDown,
+                ArenaDqnAction.MoveLeft => ArenaMoveAction.MoveLeft,
+                ArenaDqnAction.MoveRight => ArenaMoveAction.MoveRight,
+                _ => ArenaMoveAction.Idle
+            };
         }
 
         private void ApplyRewardToRoundState(ArenaRewardEventType eventType, ArenaSide actorSide, float rewardDelta, string note)
@@ -1129,13 +1523,11 @@ namespace DeepAIArena
             if (observation.shortcutBlocked && action.moveAction != ArenaMoveAction.Idle)
             {
                 stats.shortcutBlockedCount++;
-                AddPendingMlAgentReward(actorSide, mlClosedDoorActionPenalty * Time.deltaTime);
             }
 
             if (observation.movingObstacleAhead && action.moveAction != ArenaMoveAction.Idle)
             {
                 stats.movingObstacleBlockedTime += Time.deltaTime;
-                AddPendingMlAgentReward(actorSide, mlMovingObstacleActionPenalty * Time.deltaTime);
             }
         }
 
@@ -1201,6 +1593,8 @@ namespace DeepAIArena
                 rightScore = rightScore,
                 left = leftRoundStats,
                 right = rightRoundStats,
+                itemSpawnMode = itemSpawnMode.ToString(),
+                itemSpawnIndex = currentItemSpawnIndex,
                 doorOpenCount = roundDoorOpenCount,
                 switchActivationCount = roundSwitchActivationCount
             };

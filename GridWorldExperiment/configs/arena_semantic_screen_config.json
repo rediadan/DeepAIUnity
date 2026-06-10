@@ -1,0 +1,36 @@
+{
+  "env_version": "arena_semantic_screen_ctf_fixed_scene_v1",
+  "observation_format": "semantic_rgb",
+  "world_min": [-10.4, -5.6],
+  "world_max": [10.4, 5.6],
+  "grid_height": 32,
+  "grid_width": 48,
+  "channels": [
+    "red",
+    "green",
+    "blue"
+  ],
+  "actions": ["idle", "up", "down", "left", "right", "shove"],
+  "max_steps": 300,
+  "move_step": 0.28,
+  "actor_radius": 0.24,
+  "item_radius": 0.35,
+  "base_radius": 0.85,
+  "shove_radius": 0.9,
+  "enemy_speed": 0.24,
+  "moving_obstacle_speed": 0.4,
+  "danger_radius": 1.15,
+  "target_score": 1,
+  "random_seed": 42,
+  "rewards": {
+    "step": -0.005,
+    "wall_hit": -0.1,
+    "item_pickup": 1.0,
+    "deliver": 5.0,
+    "self_drop": -2.0,
+    "forced_drop": 2.0,
+    "opponent_deliver": -5.0,
+    "obstacle_hit": -0.03,
+    "target_progress": 0.02
+  }
+}

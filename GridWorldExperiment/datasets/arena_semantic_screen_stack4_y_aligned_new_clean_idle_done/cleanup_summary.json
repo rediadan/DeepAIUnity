@@ -1,0 +1,46 @@
+{
+  "demo_train.npz": {
+    "source_samples": 2711,
+    "removed_idle_done": 1185,
+    "kept_samples": 1526,
+    "source_done_count": 1587,
+    "kept_done_count": 402,
+    "action_counts": {
+      "0": 85,
+      "1": 60,
+      "2": 508,
+      "3": 197,
+      "4": 676
+    },
+    "done_by_action": {
+      "0": 0,
+      "1": 0,
+      "2": 291,
+      "3": 0,
+      "4": 111
+    },
+    "output": "E:\\GameDevelopingFile\\UniversalRandomPicker\\GridWorldExperiment\\datasets\\arena_semantic_screen_stack4_y_aligned_new_clean_idle_done\\demo_train.npz"
+  },
+  "demo_val.npz": {
+    "source_samples": 298,
+    "removed_idle_done": 154,
+    "kept_samples": 144,
+    "source_done_count": 182,
+    "kept_done_count": 28,
+    "action_counts": {
+      "0": 9,
+      "1": 8,
+      "2": 49,
+      "3": 21,
+      "4": 57
+    },
+    "done_by_action": {
+      "0": 0,
+      "1": 0,
+      "2": 28,
+      "3": 0,
+      "4": 0
+    },
+    "output": "E:\\GameDevelopingFile\\UniversalRandomPicker\\GridWorldExperiment\\datasets\\arena_semantic_screen_stack4_y_aligned_new_clean_idle_done\\demo_val.npz"
+  }
+}

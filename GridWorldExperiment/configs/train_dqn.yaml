@@ -1,0 +1,41 @@
+seed: 42
+
+env:
+  config_path: configs/env_config.json
+
+model:
+  input_channels: 10
+  grid_size: 24
+  action_count: 4
+  feature_dim: 256
+  model_type: cnn
+  init_encoder_path: null
+
+dqn:
+  total_episodes: 2000
+  max_steps_per_episode: 240
+  batch_size: 128
+  gamma: 0.99
+  learning_rate: 0.0001
+  replay_size: 100000
+  min_replay_size: 2000
+  target_update_interval: 1000
+  train_every_steps: 4
+  gradient_clip_norm: 10.0
+
+epsilon:
+  start: 1.0
+  end: 0.05
+  decay_steps: 50000
+
+expert_replay:
+  enabled: false
+  dataset_path: datasets/demonstrations/demo_train.npz
+  ratio_start: 0.5
+  ratio_mid: 0.25
+  ratio_end: 0.1
+
+logging:
+  eval_interval_episodes: 50
+  eval_episodes: 30
+  output_dir: runs/dqn_pure

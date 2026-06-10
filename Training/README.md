@@ -106,6 +106,8 @@ Save the `.demo` files under `Training\mlagents\demos`, then run:
 mlagents-learn Training\mlagents\arena_bc_rl.yaml --run-id arena_bc_rl
 ```
 
+For manual demonstration recording, set the actor mode to `MlAgents`, set its `Behavior Parameters` to `Heuristic Only`, keep `Use Manual Input In Heuristic` enabled on `ArenaMlAgent`, and set `Demonstration Recorder > Num Steps To Record` to `0` or a large value. WASD/arrow keys drive movement, and `E`, `Ctrl`, or Space records shove.
+
 ML-Agents action branches:
 
 - branch 0: `Idle / Up / Down / Left / Right`

@@ -3,6 +3,7 @@ using Unity.MLAgents.Actuators;
 using Unity.MLAgents.Policies;
 using Unity.MLAgents.Sensors;
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 namespace DeepAIArena
 {
@@ -16,17 +17,17 @@ namespace DeepAIArena
         private const int ShoveActionCount = 2;
 
         [SerializeField] private bool controlActive;
-        [SerializeField] private float targetProgressRewardScale = 0.03f;
-        [SerializeField] private float wallActionPenalty = -0.02f;
-        [SerializeField] private float stepPenalty = -0.001f;
         [SerializeField] private int decisionPeriod = 5;
+        [SerializeField] private bool useManualInputInHeuristic = true;
 
         private ArenaCharacterController controller;
         private ArenaGameManager manager;
         private bool hasPreviousObservation;
-        private float previousDistanceToTarget;
+        private ArenaObservationSnapshot previousObservation;
+        private ArenaDqnAction previousAction;
         private int previousRoundIndex = -1;
         private bool episodeEndedForRound;
+        private int fixedDecisionTick;
 
         public bool ControlActive => controlActive;
 
@@ -47,6 +48,7 @@ namespace DeepAIArena
 
             if (active)
             {
+                fixedDecisionTick = 0;
                 RequestDecision();
             }
         }
@@ -78,6 +80,8 @@ namespace DeepAIArena
         {
             hasPreviousObservation = false;
             previousRoundIndex = manager != null ? manager.RoundIndex : -1;
+            previousAction = ArenaDqnAction.Idle;
+            episodeEndedForRound = false;
         }
 
         public override void CollectObservations(VectorSensor sensor)
@@ -136,19 +140,13 @@ namespace DeepAIArena
 
             var moveAction = Mathf.Clamp(actions.DiscreteActions[0], 0, MoveActionCount - 1);
             var shoveAction = Mathf.Clamp(actions.DiscreteActions[1], 0, ShoveActionCount - 1);
+            var currentAction = ToDqnAction(moveAction, shoveAction);
 
             AddReward(manager.ConsumeMlAgentReward(controller.Side));
 
             if (hasPreviousObservation)
             {
-                var progress = previousDistanceToTarget - observation.distanceToTarget;
-                AddReward(Mathf.Clamp(progress * targetProgressRewardScale, -0.05f, 0.05f));
-            }
-
-            AddReward(stepPenalty);
-            if (observation.wallAhead && moveAction != 0)
-            {
-                AddReward(wallActionPenalty);
+                AddReward(manager.ComputeSharedAgentShapingReward(previousObservation, observation, previousAction));
             }
 
             if (manager.IsRoundTransitioning)
@@ -159,17 +157,26 @@ namespace DeepAIArena
             }
 
             controller.SetGhostInput(ToMoveVector(moveAction), shoveAction == 1, "MLAgents");
-            previousDistanceToTarget = observation.distanceToTarget;
+            previousObservation = observation;
+            previousAction = currentAction;
             hasPreviousObservation = true;
         }
 
         public override void Heuristic(in ActionBuffers actionsOut)
         {
             var discreteActions = actionsOut.DiscreteActions;
+            controller ??= GetComponent<ArenaCharacterController>();
             if (controller == null || !controlActive)
             {
                 discreteActions[0] = 0;
                 discreteActions[1] = 0;
+                return;
+            }
+
+            if (useManualInputInHeuristic)
+            {
+                discreteActions[0] = ReadManualMoveAction();
+                discreteActions[1] = IsManualShovePressed() ? 1 : 0;
                 return;
             }
 
@@ -208,6 +215,23 @@ namespace DeepAIArena
             EndCurrentRoundEpisode();
         }
 
+        private void FixedUpdate()
+        {
+            if (!controlActive || !isActiveAndEnabled)
+            {
+                return;
+            }
+
+            fixedDecisionTick++;
+            if (fixedDecisionTick < Mathf.Max(1, decisionPeriod))
+            {
+                return;
+            }
+
+            fixedDecisionTick = 0;
+            RequestDecision();
+        }
+
         private void EndCurrentRoundEpisode()
         {
             if (manager == null || episodeEndedForRound)
@@ -240,7 +264,6 @@ namespace DeepAIArena
             var behavior = GetComponent<BehaviorParameters>();
             behavior.BehaviorName = "ArenaMlAgent";
             behavior.TeamId = controller != null && controller.Side == ArenaSide.Right ? 1 : 0;
-            behavior.BehaviorType = BehaviorType.Default;
             behavior.BrainParameters.VectorObservationSize = ObservationSize;
             behavior.BrainParameters.NumStackedVectorObservations = 1;
             behavior.BrainParameters.ActionSpec = ActionSpec.MakeDiscrete(MoveActionCount, ShoveActionCount);
@@ -279,6 +302,83 @@ namespace DeepAIArena
                 4 => Vector2.right,
                 _ => Vector2.zero
             };
+        }
+
+        private static ArenaDqnAction ToDqnAction(int moveAction, int shoveAction)
+        {
+            if (shoveAction == 1)
+            {
+                return ArenaDqnAction.Shove;
+            }
+
+            return moveAction switch
+            {
+                1 => ArenaDqnAction.MoveUp,
+                2 => ArenaDqnAction.MoveDown,
+                3 => ArenaDqnAction.MoveLeft,
+                4 => ArenaDqnAction.MoveRight,
+                _ => ArenaDqnAction.Idle
+            };
+        }
+
+        private static int ReadManualMoveAction()
+        {
+            var move = Vector2.zero;
+            var keyboard = Keyboard.current;
+            if (keyboard != null)
+            {
+                var horizontal = 0f;
+                var vertical = 0f;
+                if (keyboard.aKey.isPressed || keyboard.leftArrowKey.isPressed)
+                {
+                    horizontal -= 1f;
+                }
+
+                if (keyboard.dKey.isPressed || keyboard.rightArrowKey.isPressed)
+                {
+                    horizontal += 1f;
+                }
+
+                if (keyboard.sKey.isPressed || keyboard.downArrowKey.isPressed)
+                {
+                    vertical -= 1f;
+                }
+
+                if (keyboard.wKey.isPressed || keyboard.upArrowKey.isPressed)
+                {
+                    vertical += 1f;
+                }
+
+                move = new Vector2(horizontal, vertical);
+            }
+
+            var gamepad = Gamepad.current;
+            if (gamepad != null)
+            {
+                var stick = gamepad.leftStick.ReadValue();
+                if (stick.sqrMagnitude > 0.01f)
+                {
+                    move = stick;
+                }
+            }
+
+            return ToDiscreteMoveAction(move);
+        }
+
+        private static bool IsManualShovePressed()
+        {
+            var keyboard = Keyboard.current;
+            if (keyboard != null
+                && (keyboard.leftCtrlKey.isPressed
+                    || keyboard.rightCtrlKey.isPressed
+                    || keyboard.eKey.isPressed
+                    || keyboard.spaceKey.isPressed))
+            {
+                return true;
+            }
+
+            var gamepad = Gamepad.current;
+            return gamepad != null && gamepad.rightShoulder.isPressed;
         }
 
         private static Vector2 GetHeuristicTarget(ArenaObservationSnapshot observation)
