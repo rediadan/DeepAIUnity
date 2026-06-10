@@ -244,6 +244,18 @@ namespace DeepAIArena
         [SerializeField] private float dqnWallActionPenalty = -0.1f;
         [SerializeField] private float dqnInvalidShovePenalty = -0.03f;
         [SerializeField] private float dqnShoveOpportunityDistance = 0.95f;
+        [Header("Path Guidance Rewards")]
+        [SerializeField] private bool usePathDistanceReward = true;
+        [SerializeField] private bool useFlowFieldDirectionReward = true;
+        [SerializeField] private Vector2 pathWorldMin = new(-10.4f, -5.6f);
+        [SerializeField] private Vector2 pathWorldMax = new(10.4f, 5.6f);
+        [SerializeField, Range(16, 96)] private int pathGridWidth = 48;
+        [SerializeField, Range(12, 64)] private int pathGridHeight = 32;
+        [SerializeField] private float pathDistanceRewardScale = 0.025f;
+        [SerializeField] private float pathFlowDirectionReward = 0.008f;
+        [SerializeField] private float pathFlowDirectionPenalty = -0.004f;
+        [SerializeField] private bool pathTreatClosedDoorsAsBlocked = true;
+        [SerializeField] private bool pathTreatMovingObstaclesAsBlocked;
         [SerializeField] private float mlDoorOpenReward = 0.3f;
         [SerializeField] private float openDoorSwitchPenalty = -0.15f;
         [SerializeField] private float mlClosedDoorActionPenalty = -0.015f;
@@ -1379,13 +1391,19 @@ namespace DeepAIArena
             ArenaObservationSnapshot currentObservation,
             ArenaActionSnapshot previousAction)
         {
-            var previousDistance = Vector2.Distance(previousObservation.selfPosition, previousObservation.targetPosition);
-            var currentDistance = Vector2.Distance(currentObservation.selfPosition, currentObservation.targetPosition);
-            var progressScale = ResolveProgressRewardScale(previousObservation.targetType);
-            var progressReward = Mathf.Clamp(
-                (previousDistance - currentDistance) * progressScale,
-                -dqnProgressRewardClamp,
-                dqnProgressRewardClamp);
+            var progressReward = ComputeEuclideanProgressReward(previousObservation, currentObservation);
+            var flowDirectionReward = 0f;
+            if (TryComputePathGuidanceReward(
+                    previousObservation,
+                    currentObservation,
+                    previousAction,
+                    out var pathProgressReward,
+                    out flowDirectionReward)
+                && usePathDistanceReward)
+            {
+                progressReward = pathProgressReward;
+            }
+
             var wallPenalty = previousObservation.wallAhead
                 && previousAction.moveAction != ArenaMoveAction.Idle
                 ? dqnWallActionPenalty
@@ -1405,11 +1423,339 @@ namespace DeepAIArena
 
             return dqnStepPenalty
                 + progressReward
+                + flowDirectionReward
                 + wallPenalty
                 + invalidShovePenalty
                 + closedDoorPenalty
                 + movingObstaclePenalty;
         }
+
+        private float ComputeEuclideanProgressReward(
+            ArenaObservationSnapshot previousObservation,
+            ArenaObservationSnapshot currentObservation)
+        {
+            var previousDistance = Vector2.Distance(previousObservation.selfPosition, previousObservation.targetPosition);
+            var currentDistance = Vector2.Distance(currentObservation.selfPosition, currentObservation.targetPosition);
+            var progressScale = ResolveProgressRewardScale(previousObservation.targetType);
+            return Mathf.Clamp(
+                (previousDistance - currentDistance) * progressScale,
+                -dqnProgressRewardClamp,
+                dqnProgressRewardClamp);
+        }
+
+        private bool TryComputePathGuidanceReward(
+            ArenaObservationSnapshot previousObservation,
+            ArenaObservationSnapshot currentObservation,
+            ArenaActionSnapshot previousAction,
+            out float pathProgressReward,
+            out float flowDirectionReward)
+        {
+            pathProgressReward = 0f;
+            flowDirectionReward = 0f;
+            if (!usePathDistanceReward && !useFlowFieldDirectionReward)
+            {
+                return false;
+            }
+
+            if (!TryBuildPathDistanceField(previousObservation.targetPosition, out var distances, out var blocked))
+            {
+                return false;
+            }
+
+            var previousIndex = FindNearestReachablePathIndex(WorldToPathCell(previousObservation.selfPosition), distances);
+            var currentIndex = FindNearestReachablePathIndex(WorldToPathCell(currentObservation.selfPosition), distances);
+            if (previousIndex < 0 || currentIndex < 0)
+            {
+                return false;
+            }
+
+            if (usePathDistanceReward)
+            {
+                var pathProgress = distances[previousIndex] - distances[currentIndex];
+                pathProgressReward = Mathf.Clamp(
+                    pathProgress * pathDistanceRewardScale,
+                    -dqnProgressRewardClamp,
+                    dqnProgressRewardClamp);
+            }
+
+            if (useFlowFieldDirectionReward)
+            {
+                flowDirectionReward = ComputeFlowFieldDirectionReward(previousIndex, previousAction.moveAction, distances, blocked);
+            }
+
+            return true;
+        }
+
+        private float ComputeFlowFieldDirectionReward(
+            int previousIndex,
+            ArenaMoveAction moveAction,
+            int[] distances,
+            bool[] blocked)
+        {
+            if (moveAction == ArenaMoveAction.Idle || previousIndex < 0 || previousIndex >= distances.Length)
+            {
+                return 0f;
+            }
+
+            var currentDistance = distances[previousIndex];
+            if (currentDistance <= 0)
+            {
+                return 0f;
+            }
+
+            var cell = PathIndexToCell(previousIndex);
+            var delta = MoveActionToPathCellDelta(moveAction);
+            var nextX = cell.x + delta.x;
+            var nextY = cell.y + delta.y;
+            if (!IsPathCellInside(nextY, nextX))
+            {
+                return pathFlowDirectionPenalty;
+            }
+
+            var nextIndex = PathIndex(nextY, nextX);
+            if (blocked[nextIndex] || distances[nextIndex] < 0)
+            {
+                return pathFlowDirectionPenalty;
+            }
+
+            if (distances[nextIndex] < currentDistance)
+            {
+                return pathFlowDirectionReward;
+            }
+
+            if (distances[nextIndex] > currentDistance)
+            {
+                return pathFlowDirectionPenalty;
+            }
+
+            return 0f;
+        }
+
+        private bool TryBuildPathDistanceField(Vector2 targetPosition, out int[] distances, out bool[] blocked)
+        {
+            var cellCount = PathGridWidth * PathGridHeight;
+            distances = new int[cellCount];
+            blocked = new bool[cellCount];
+            for (var i = 0; i < distances.Length; i++)
+            {
+                distances[i] = -1;
+            }
+
+            BuildPathBlockedCells(blocked);
+            var targetIndex = FindNearestWalkablePathIndex(WorldToPathCell(targetPosition), blocked);
+            if (targetIndex < 0)
+            {
+                return false;
+            }
+
+            var queue = new int[cellCount];
+            var head = 0;
+            var tail = 0;
+            queue[tail++] = targetIndex;
+            distances[targetIndex] = 0;
+            while (head < tail)
+            {
+                var index = queue[head++];
+                var cell = PathIndexToCell(index);
+                var nextDistance = distances[index] + 1;
+                TryVisitPathNeighbor(cell.x + 1, cell.y, nextDistance, distances, blocked, queue, ref tail);
+                TryVisitPathNeighbor(cell.x - 1, cell.y, nextDistance, distances, blocked, queue, ref tail);
+                TryVisitPathNeighbor(cell.x, cell.y + 1, nextDistance, distances, blocked, queue, ref tail);
+                TryVisitPathNeighbor(cell.x, cell.y - 1, nextDistance, distances, blocked, queue, ref tail);
+            }
+
+            return true;
+        }
+
+        private void TryVisitPathNeighbor(
+            int x,
+            int y,
+            int distance,
+            int[] distances,
+            bool[] blocked,
+            int[] queue,
+            ref int tail)
+        {
+            if (!IsPathCellInside(y, x))
+            {
+                return;
+            }
+
+            var index = PathIndex(y, x);
+            if (blocked[index] || distances[index] >= 0)
+            {
+                return;
+            }
+
+            distances[index] = distance;
+            queue[tail++] = index;
+        }
+
+        private void BuildPathBlockedCells(bool[] blocked)
+        {
+            var root = transform.parent != null ? transform.parent : transform;
+            foreach (var collider in root.GetComponentsInChildren<BoxCollider2D>(includeInactive: true))
+            {
+                if (ShouldIgnorePathCollider(collider))
+                {
+                    continue;
+                }
+
+                MarkPathColliderBounds(blocked, collider.bounds);
+            }
+        }
+
+        private bool ShouldIgnorePathCollider(BoxCollider2D collider)
+        {
+            if (collider == null || collider.isTrigger)
+            {
+                return true;
+            }
+
+            if (collider.GetComponentInParent<ArenaCharacterController>() != null
+                || collider.GetComponentInParent<ArenaItem>() != null
+                || collider.GetComponentInParent<ArenaBaseZone>() != null
+                || collider.GetComponentInParent<ArenaSwitch>() != null)
+            {
+                return true;
+            }
+
+            var door = collider.GetComponentInParent<ArenaDoor>();
+            if (door != null)
+            {
+                return !pathTreatClosedDoorsAsBlocked || door.IsOpen;
+            }
+
+            var movingObstacle = collider.GetComponentInParent<ArenaMovingObstacle>();
+            if (movingObstacle != null)
+            {
+                return !pathTreatMovingObstaclesAsBlocked;
+            }
+
+            return false;
+        }
+
+        private void MarkPathColliderBounds(bool[] blocked, Bounds bounds)
+        {
+            var min = WorldToPathCell(bounds.min);
+            var max = WorldToPathCell(bounds.max);
+            var minX = Mathf.Min(min.x, max.x);
+            var maxX = Mathf.Max(min.x, max.x);
+            var minY = Mathf.Min(min.y, max.y);
+            var maxY = Mathf.Max(min.y, max.y);
+            for (var y = minY; y <= maxY; y++)
+            {
+                for (var x = minX; x <= maxX; x++)
+                {
+                    if (IsPathCellInside(y, x))
+                    {
+                        blocked[PathIndex(y, x)] = true;
+                    }
+                }
+            }
+        }
+
+        private int FindNearestWalkablePathIndex(Vector2Int origin, bool[] blocked)
+        {
+            var maxRadius = Mathf.Max(PathGridWidth, PathGridHeight);
+            for (var radius = 0; radius <= maxRadius; radius++)
+            {
+                for (var y = origin.y - radius; y <= origin.y + radius; y++)
+                {
+                    for (var x = origin.x - radius; x <= origin.x + radius; x++)
+                    {
+                        if (Mathf.Abs(x - origin.x) + Mathf.Abs(y - origin.y) != radius)
+                        {
+                            continue;
+                        }
+
+                        if (!IsPathCellInside(y, x))
+                        {
+                            continue;
+                        }
+
+                        var index = PathIndex(y, x);
+                        if (!blocked[index])
+                        {
+                            return index;
+                        }
+                    }
+                }
+            }
+
+            return -1;
+        }
+
+        private int FindNearestReachablePathIndex(Vector2Int origin, int[] distances)
+        {
+            var maxRadius = Mathf.Max(PathGridWidth, PathGridHeight);
+            for (var radius = 0; radius <= maxRadius; radius++)
+            {
+                for (var y = origin.y - radius; y <= origin.y + radius; y++)
+                {
+                    for (var x = origin.x - radius; x <= origin.x + radius; x++)
+                    {
+                        if (Mathf.Abs(x - origin.x) + Mathf.Abs(y - origin.y) != radius)
+                        {
+                            continue;
+                        }
+
+                        if (!IsPathCellInside(y, x))
+                        {
+                            continue;
+                        }
+
+                        var index = PathIndex(y, x);
+                        if (distances[index] >= 0)
+                        {
+                            return index;
+                        }
+                    }
+                }
+            }
+
+            return -1;
+        }
+
+        private Vector2Int WorldToPathCell(Vector2 position)
+        {
+            var normalized = new Vector2(
+                Mathf.InverseLerp(pathWorldMin.x, pathWorldMax.x, position.x),
+                Mathf.InverseLerp(pathWorldMin.y, pathWorldMax.y, position.y));
+            var x = Mathf.Clamp(Mathf.FloorToInt(normalized.x * PathGridWidth), 0, PathGridWidth - 1);
+            var y = Mathf.Clamp(Mathf.FloorToInt((1f - normalized.y) * PathGridHeight), 0, PathGridHeight - 1);
+            return new Vector2Int(x, y);
+        }
+
+        private Vector2Int PathIndexToCell(int index)
+        {
+            return new Vector2Int(index % PathGridWidth, index / PathGridWidth);
+        }
+
+        private Vector2Int MoveActionToPathCellDelta(ArenaMoveAction action)
+        {
+            return action switch
+            {
+                ArenaMoveAction.MoveUp => new Vector2Int(0, -1),
+                ArenaMoveAction.MoveDown => new Vector2Int(0, 1),
+                ArenaMoveAction.MoveLeft => new Vector2Int(-1, 0),
+                ArenaMoveAction.MoveRight => new Vector2Int(1, 0),
+                _ => Vector2Int.zero
+            };
+        }
+
+        private int PathIndex(int y, int x)
+        {
+            return y * PathGridWidth + x;
+        }
+
+        private bool IsPathCellInside(int y, int x)
+        {
+            return x >= 0 && y >= 0 && x < PathGridWidth && y < PathGridHeight;
+        }
+
+        private int PathGridWidth => Mathf.Max(4, pathGridWidth);
+        private int PathGridHeight => Mathf.Max(4, pathGridHeight);
 
         private float ResolveProgressRewardScale(ArenaTargetType targetType)
         {
