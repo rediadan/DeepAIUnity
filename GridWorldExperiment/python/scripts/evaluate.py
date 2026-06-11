@@ -12,7 +12,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "python"))
 
 from envs.grid_env import GridWorldEnv
 from models.bc_policy import BCPolicy
-from models.dqn import CNNDQN, MLPDQN
+from models.dqn import CNNDQN, DuelingCNNDQN, DuelingNatureDQN, MLPDQN, NatureDQN, ResNetDQN
 from rl.dqn_trainer import evaluate_model
 
 
@@ -25,8 +25,17 @@ def _build_model_from_checkpoint(path: Path, device: torch.device):
     grid_width = int(checkpoint.get("grid_width", grid_size))
     action_count = int(checkpoint.get("action_count", 4))
     feature_dim = int(checkpoint.get("feature_dim", 256))
+    model_type = str(model_type).lower()
     if model_type == "mlp":
         model = MLPDQN(input_channels, grid_size, grid_height, grid_width, action_count, feature_dim)
+    elif model_type in ("nature", "nature_cnn", "nature_dqn"):
+        model = NatureDQN(input_channels, grid_size, grid_height, grid_width, action_count, feature_dim)
+    elif model_type in ("dueling", "dueling_cnn"):
+        model = DuelingCNNDQN(input_channels, grid_size, grid_height, grid_width, action_count, feature_dim)
+    elif model_type in ("dueling_nature", "dueling_nature_cnn"):
+        model = DuelingNatureDQN(input_channels, grid_size, grid_height, grid_width, action_count, feature_dim)
+    elif model_type in ("resnet", "residual_cnn"):
+        model = ResNetDQN(input_channels, grid_size, grid_height, grid_width, action_count, feature_dim)
     else:
         model = CNNDQN(input_channels, grid_size, grid_height, grid_width, action_count, feature_dim)
     model.load_state_dict(checkpoint["model_state_dict"])

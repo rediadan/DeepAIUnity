@@ -10,7 +10,7 @@ import torch
 from torch import nn
 
 from envs.grid_env import ACTION_DELTAS, GridWorldEnv
-from models.dqn import CNNDQN, MLPDQN
+from models.dqn import CNNDQN, DuelingCNNDQN, DuelingNatureDQN, MLPDQN, NatureDQN, ResNetDQN
 from rl.epsilon_scheduler import LinearEpsilonScheduler
 from rl.expert_replay_buffer import ExpertReplayBuffer
 from rl.replay_buffer import ReplayBatch, ReplayBuffer, concat_batches
@@ -63,7 +63,8 @@ def build_model(
     grid_height: int | None = None,
     grid_width: int | None = None,
 ) -> nn.Module:
-    if model_type == "cnn":
+    normalized_model_type = model_type.lower()
+    if normalized_model_type == "cnn":
         return CNNDQN(
             input_channels=input_channels,
             grid_size=grid_size,
@@ -72,7 +73,43 @@ def build_model(
             action_count=action_count,
             feature_dim=feature_dim,
         )
-    if model_type == "mlp":
+    if normalized_model_type in ("nature", "nature_cnn", "nature_dqn"):
+        return NatureDQN(
+            input_channels=input_channels,
+            grid_size=grid_size,
+            grid_height=grid_height,
+            grid_width=grid_width,
+            action_count=action_count,
+            feature_dim=feature_dim,
+        )
+    if normalized_model_type in ("dueling", "dueling_cnn"):
+        return DuelingCNNDQN(
+            input_channels=input_channels,
+            grid_size=grid_size,
+            grid_height=grid_height,
+            grid_width=grid_width,
+            action_count=action_count,
+            feature_dim=feature_dim,
+        )
+    if normalized_model_type in ("dueling_nature", "dueling_nature_cnn"):
+        return DuelingNatureDQN(
+            input_channels=input_channels,
+            grid_size=grid_size,
+            grid_height=grid_height,
+            grid_width=grid_width,
+            action_count=action_count,
+            feature_dim=feature_dim,
+        )
+    if normalized_model_type in ("resnet", "residual_cnn"):
+        return ResNetDQN(
+            input_channels=input_channels,
+            grid_size=grid_size,
+            grid_height=grid_height,
+            grid_width=grid_width,
+            action_count=action_count,
+            feature_dim=feature_dim,
+        )
+    if normalized_model_type == "mlp":
         return MLPDQN(
             input_channels=input_channels,
             grid_size=grid_size,

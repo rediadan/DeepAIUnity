@@ -54,7 +54,7 @@ def build_live_config(args: argparse.Namespace, payload: dict[str, Any]) -> tupl
 
     use_expert_replay = bool(expert_payload.get("enabled", False)) or bool(args.use_expert_replay)
     config = DQNTrainConfig(
-        model_type="cnn",
+        model_type=str(model_payload.get("model_type", "cnn")),
         total_episodes=0,
         max_steps_per_episode=int(dqn_payload["max_steps_per_episode"]),
         batch_size=args.batch_size or int(dqn_payload["batch_size"]),
@@ -105,7 +105,7 @@ class LiveDqnTrainer:
         self.device = torch.device("cuda" if torch.cuda.is_available() and not config.cpu else "cpu")
         self.state_shape = (env_config.channel_count, env_config.grid_height, env_config.grid_width)
         self.model = build_model(
-            "cnn",
+            config.model_type,
             env_config.channel_count,
             env_config.grid_size,
             env_config.action_count,
@@ -114,7 +114,7 @@ class LiveDqnTrainer:
             grid_width=env_config.grid_width,
         ).to(self.device)
         self.target_model = build_model(
-            "cnn",
+            config.model_type,
             env_config.channel_count,
             env_config.grid_size,
             env_config.action_count,
@@ -326,7 +326,7 @@ class LiveDqnTrainer:
         torch.save(
             {
                 "model_state_dict": self.model.state_dict(),
-                "model_type": "cnn",
+                "model_type": self.config.model_type,
                 "input_channels": self.env_config.channel_count,
                 "grid_size": self.env_config.grid_size,
                 "grid_height": self.env_config.grid_height,
@@ -441,7 +441,7 @@ def serve_forever(args: argparse.Namespace) -> None:
 
     print(
         f"Live CNN-DQN listening on {args.host}:{args.port}, "
-        f"device={trainer.device}, state_shape={trainer.state_shape}",
+        f"model_type={train_config.model_type}, device={trainer.device}, state_shape={trainer.state_shape}",
         flush=True,
     )
 

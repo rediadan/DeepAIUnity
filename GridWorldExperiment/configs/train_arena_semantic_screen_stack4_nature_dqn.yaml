@@ -1,0 +1,43 @@
+seed: 42
+
+env:
+  config_path: configs/arena_semantic_screen_stack4_config.json
+
+model:
+  input_channels: 12
+  grid_size: 32
+  grid_height: 32
+  grid_width: 48
+  action_count: 6
+  feature_dim: 256
+  model_type: nature_cnn
+  init_encoder_path: null
+
+dqn:
+  total_episodes: 800
+  max_steps_per_episode: 300
+  batch_size: 128
+  gamma: 0.99
+  learning_rate: 0.0001
+  replay_size: 20000
+  min_replay_size: 2000
+  target_update_interval: 1000
+  train_every_steps: 4
+  gradient_clip_norm: 10.0
+
+epsilon:
+  start: 1.0
+  end: 0.05
+  decay_steps: 60000
+
+expert_replay:
+  enabled: false
+  dataset_path: datasets/arena_semantic_screen_stack4/demo_train.npz
+  ratio_start: 0.5
+  ratio_mid: 0.25
+  ratio_end: 0.1
+
+logging:
+  eval_interval_episodes: 50
+  eval_episodes: 30
+  output_dir: runs/arena_semantic_screen_stack4_nature_dqn
